@@ -8,9 +8,13 @@ env:
 
 on:
     push:
-        releases:
-            types:
-                - created
+        paths:
+            - '!**/*.md'
+        branches:
+            - 'main'
+    releases:
+        types:
+            - created
 
 jobs:
     build-and-push:
@@ -32,8 +36,20 @@ jobs:
                 password: ${{ secrets.ARTIFACTORY_TOKEN }}
                 action: warn_when_found
             - name: Kaniko build
+              id: kaniko-build-release
               uses: aevea/action-kaniko@master
-              if: ${{ steps.image-exists.outputs.image-exists == 'false' }}
+              if: ${{ steps.image-exists.outputs.image-exists == 'false' && env.GITHUB_REF_NAME != 'main' }}
+              with:
+                image: ${{ env.DOCKER_IMAGE_NAME }}
+                registry: ${{ env.ARTIFACTORY_REGISTRY }}
+                username: ${{ secrets.ARTIFACTORY_USERNAME }}
+                password: ${{ secrets.ARTIFACTORY_TOKEN }}
+                cache: true
+                tag: ${{env.GITHUB_REF_NAME}}
+            - name: Kaniko build
+              id: kaniko-build-main
+              uses: aevea/action-kaniko@master
+              if: ${{ steps.image-exists.outputs.image-exists == 'false' && env.GITHUB_REF_NAME != 'main' }}
               with:
                 image: ${{ env.DOCKER_IMAGE_NAME }}
                 registry: ${{ env.ARTIFACTORY_REGISTRY }}
@@ -42,13 +58,13 @@ jobs:
                 cache: true
                 tag: ${{env.GITHUB_REF_NAME}}
     security-scan:
+        if: ${{ env.GITHUB_REF_NAME != 'main' }}
         runs-on:
             - mw
         needs:  build-and-push
         steps:
             - name: Checkout
               uses: actions/checkout@v2
-
             - name: Security Scan Image
               uses: OIT/ais-action-image-security-scan@main
               with:
