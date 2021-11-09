@@ -12,7 +12,7 @@ on:
             - '!**/*.md'
         branches:
             - 'main'
-    releases:
+    release:
         types:
             - created
 
