@@ -16,6 +16,9 @@ following additions:
 - Post-start script that properly configures docker credentials and
   kubeconfig.
 
+> Note: This devcontainer may only work on Linux, Mac OS, and inside
+> of WSL on Windows. It will likely fail outside of WSL.
+
 ## Security Note
 
 This container uses a passwordless sudo for the user in the container.
