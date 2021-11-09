@@ -8,8 +8,8 @@ env:
 
 on:
     push:
-        paths:
-            - '!**/*.md'
+        paths-ignore:
+            - '**/*.md'
         branches:
             - 'main'
     release:
