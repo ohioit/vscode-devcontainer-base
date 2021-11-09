@@ -30,7 +30,7 @@ jobs:
             - name: Check if image exists
               id: image-exists
               uses: OIT/ais-action-docker-image-exists@main
-              if: ${{ env.GITHUB_REF_NAME != 'main' }}
+              if: ${{ github.ref_name != 'main' }}
               with:
                 image: ${{ env.DOCKER_IMAGE }}
                 username: ${{ secrets.ARTIFACTORY_USERNAME }}
@@ -39,7 +39,7 @@ jobs:
             - name: Kaniko build
               id: kaniko-build-release
               uses: aevea/action-kaniko@master
-              if: ${{ steps.image-exists.outputs.image-exists == 'false' && env.GITHUB_REF_NAME != 'main' }}
+              if: ${{ steps.image-exists.outputs.image-exists == 'false' && github.ref_name != 'main' }}
               with:
                 image: ${{ env.DOCKER_IMAGE_NAME }}
                 registry: ${{ env.ARTIFACTORY_REGISTRY }}
@@ -50,7 +50,7 @@ jobs:
             - name: Kaniko build
               id: kaniko-build-main
               uses: aevea/action-kaniko@master
-              if: ${{ steps.image-exists.outputs.image-exists == 'false' && env.GITHUB_REF_NAME != 'main' }}
+              if: ${{ steps.image-exists.outputs.image-exists == 'false' && github.ref_name == 'main' }}
               with:
                 image: ${{ env.DOCKER_IMAGE_NAME }}
                 registry: ${{ env.ARTIFACTORY_REGISTRY }}
@@ -59,7 +59,7 @@ jobs:
                 cache: true
                 tag: latest
     security-scan:
-        if: ${{ env.GITHUB_REF_NAME != 'main' }}
+        if: ${{ github.ref_name != 'main' }}
         runs-on:
             - mw
         needs:  build-and-push
