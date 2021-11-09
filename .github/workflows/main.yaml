@@ -1,0 +1,57 @@
+name: Build and Publish Image
+
+env:
+    ARTIFACTORY_REGISTRY: docker.artifactory.oit.ohio.edu
+    GITHUB_ACCESS_TOKEN: ${{ secrets.CAD_GITHUB_PAT }}
+    # TODO: Detect the image from skaffold.yaml
+    DOCKER_IMAGE: docker.artifactory.oit.ohio.edu/ais/vscode-devcontainer-base
+
+on:
+    push:
+        releases:
+            types:
+                - created
+
+jobs:
+    build-and-push:
+        runs-on:
+            - mw
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v2
+            - name: Add Docker Metadata
+              uses: OIT/ais-action-add-dockerfile-metadata@main
+              with:
+                docker_files: './Dockerfile'
+            - name: Check if image exists
+              id: image-exists
+              uses: OIT/ais-action-docker-image-exists@main
+              with:
+                image: ${{ env.DOCKER_IMAGE }}
+                username: ${{ secrets.ARTIFACTORY_USERNAME }}
+                password: ${{ secrets.ARTIFACTORY_TOKEN }}
+                action: warn_when_found
+            - name: Kaniko build
+              uses: aevea/action-kaniko@master
+              if: ${{ steps.image-exists.outputs.image-exists == 'false' }}
+              with:
+                image: ${{ env.DOCKER_IMAGE_NAME }}
+                registry: ${{ env.ARTIFACTORY_REGISTRY }}
+                username: ${{ secrets.ARTIFACTORY_USERNAME }}
+                password: ${{ secrets.ARTIFACTORY_TOKEN }}
+                cache: true
+                tag: ${{env.GITHUB_REF_NAME}}
+    security-scan:
+        runs-on:
+            - mw
+        needs:  build-and-push
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v2
+
+            - name: Security Scan Image
+              uses: OIT/ais-action-image-security-scan@main
+              with:
+                github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
+                anchore_username: ${{ secrets.ANCHORE_USERNAME }}
+                anchore_password: ${{ secrets.ANCHORE_PASSWORD }}

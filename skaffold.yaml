@@ -1,0 +1,8 @@
+apiVersion: skaffold/v1beta13
+kind: Config
+
+build:
+  artifacts:
+    - image: docker.artifactory.oit.ohio.edu/ais/vscode-devcontainer-base
+  local:
+    push: true
