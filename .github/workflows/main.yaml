@@ -68,11 +68,11 @@ jobs:
                 password: ${{ secrets.ARTIFACTORY_TOKEN }}
                 cache: true
                 tag: ${{ github.ref_name }}
-    security-scan:
-        if: ${{ github.ref_name != 'main' }}
+    security-scan-latest:
+        if: ${{ github.ref_name == 'main' }}
         runs-on:
             - mw
-        needs:  build-and-push
+        needs:  build-and-push-latest
         steps:
             - name: Checkout
               uses: actions/checkout@v2
@@ -82,3 +82,19 @@ jobs:
                 github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
                 anchore_username: ${{ secrets.ANCHORE_USERNAME }}
                 anchore_password: ${{ secrets.ANCHORE_PASSWORD }}
+                images: ${{ env.DOCKER_IMAGE_NAME }}:latest
+    security-scan-release:
+        if: ${{ github.ref_name != 'main' }}
+        runs-on:
+            - mw
+        needs:  build-and-push-release
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v2
+            - name: Security Scan Image
+              uses: OIT/ais-action-image-security-scan@main
+              with:
+                github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
+                anchore_username: ${{ secrets.ANCHORE_USERNAME }}
+                anchore_password: ${{ secrets.ANCHORE_PASSWORD }}
+                images: ${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
