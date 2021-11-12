@@ -1,4 +1,4 @@
-FROM debian:stretch-slim
+FROM ubuntu:20.04
 
 ARG USERNAME=vscode
 ARG USER_UID=1000
@@ -18,7 +18,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         zsh \
         shellcheck \
         jq \
-        python3.9 \
+        python3.7 \
         python3-pip \
         locales \
         apt-transport-https \
@@ -29,9 +29,9 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     pip3 install yq && \
     sed -i '/'${LANG}'/s/^# //g' /etc/locale.gen && \
     locale-gen && \
-    curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add - && \
+    curl -fsSL https://download.docker.com/linux/$(lsb_release -is | tr '[:upper:]' '[:lower:]')/gpg | apt-key add - && \
     add-apt-repository \
-        "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/debian \
+    "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/$(lsb_release -is | tr '[:upper:]' '[:lower:]') \
         $(lsb_release -cs) \
         stable" && \
     apt-get update && \
