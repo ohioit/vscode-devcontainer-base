@@ -18,7 +18,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         zsh \
         shellcheck \
         jq \
-        python3.7 \
+        python3.9 \
         python3-pip \
         locales \
         apt-transport-https \
