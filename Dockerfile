@@ -51,7 +51,7 @@ RUN groupadd -g $USER_GID $USERNAME && \
 
 ARG SKAFFOLD_VERSION=v1.34.0
 
-RUN curl -Lo /usr/local/bin/skaffold https://github.com/GoogleContainerTools/skaffold/releases/download${SKAFFOLD_VERSION}/skaffold-linux-$(dpkg --print-architecture) && \
+RUN curl -Lo /usr/local/bin/skaffold https://github.com/GoogleContainerTools/skaffold/releases/download/${SKAFFOLD_VERSION}/skaffold-linux-$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/skaffold
 
 ARG KUBECTL_VERSION=v1.19.0
