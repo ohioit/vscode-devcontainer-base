@@ -71,7 +71,9 @@ RUN curl -Lo /tmp/helm.tar.gz https://get.helm.sh/helm-${HELM_VERSION}-linux-$(d
 COPY setup-container.sh /usr/local/bin/setup-container
 RUN chmod +x /usr/local/bin/setup-container && \
     mkdir /home/vscode/.docker /home/vscode/.kube && \
-    chown ${USER_UID}:${USER_GID} /home/vscode/.docker /home/vscode/.kube
+    chown ${USER_UID}:${USER_GID} /home/vscode/.docker /home/vscode/.kube && \
+    mkdir -p /usr/local/lib/devcontainer/hooks.d/pre-start && \
+    mkdir -p /usr/local/lib/devcontainer/hooks.d/post-start
 
 USER ${USER_UID}
 
