@@ -68,6 +68,10 @@ RUN curl -Lo /tmp/helm.tar.gz https://get.helm.sh/helm-${HELM_VERSION}-linux-$(d
     rm -Rf /tmp/helm.tar.gz /tmp/linux-$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/helm
 
+ARG KUBESEAL_VERSION=v0.16.0
+RUN curl -Lo /tmp/kubeseal https://github.com/bitnami-labs/sealed-secrets/releases/download/${KUBESEAL_VERSION}/kubeseal-linux-$(dpkg --print-architecture) && \
+    install -m 755 /tmp/kubeseal /usr/local/bin/kubeseal
+
 COPY setup-container.sh /usr/local/bin/setup-container
 RUN chmod +x /usr/local/bin/setup-container && \
     mkdir /home/vscode/.docker /home/vscode/.kube && \
