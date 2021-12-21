@@ -1,100 +1,108 @@
 name: Build and Publish Image
 
 env:
-    ARTIFACTORY_REGISTRY: docker.artifactory.oit.ohio.edu
-    GITHUB_ACCESS_TOKEN: ${{ secrets.CAD_GITHUB_PAT }}
-    # TODO: Detect the image from skaffold.yaml
-    DOCKER_IMAGE_NAME: ais/vscode-devcontainer-base
+  ARTIFACTORY_REGISTRY: docker.artifactory.oit.ohio.edu
+  GITHUB_ACCESS_TOKEN: ${{ secrets.CAD_GITHUB_PAT }}
+  # TODO: Detect the image from skaffold.yaml
+  DOCKER_IMAGE_NAME: ais/vscode-devcontainer-base
 
 on:
-    push:
-        paths-ignore:
-            - '**/*.md'
-        branches:
-            - 'main'
-    release:
-        types:
-            - created
+  push:
+    paths-ignore:
+      - '**/*.md'
+    branches:
+      - 'main'
+  release:
+    types:
+      - created
 
 jobs:
     build-and-push-latest:
-        if: ${{ github.ref == 'refs/heads/main' }}
-        runs-on:
-            - mw
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v2
-            - name: Add Docker Metadata
-              uses: OIT/ais-action-add-dockerfile-metadata@main
-              with:
-                docker_files: './Dockerfile'
-            - name: Kaniko build
-              uses: aevea/action-kaniko@master
-              with:
-                image: ${{ env.DOCKER_IMAGE_NAME }}
-                registry: ${{ env.ARTIFACTORY_REGISTRY }}
-                username: ${{ secrets.ARTIFACTORY_USERNAME }}
-                password: ${{ secrets.ARTIFACTORY_TOKEN }}
-                cache: true
-                tag: latest
+      if: ${{ github.ref == 'refs/heads/main' }}
+      runs-on:
+        - mw
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v2
+        - name: Build Setup
+          uses: OIT/ais-action-build-setup@main
+          with:
+            github_token: ${{ secrets.CAD_GITHUB_PAT }}
+        - name: Add Docker Metadata
+          uses: OIT/ais-action-add-dockerfile-metadata@main
+          with:
+            docker_files: './Dockerfile'
+        - name: Kaniko build
+          uses: aevea/action-kaniko@master
+          with:
+            image: ${{ env.DOCKER_IMAGE_NAME }}
+            registry: ${{ env.ARTIFACTORY_REGISTRY }}
+            username: ${{ secrets.ARTIFACTORY_USERNAME }}
+            password: ${{ secrets.ARTIFACTORY_TOKEN }}
+            cache: true
+            tag: latest
     build-and-push-release:
-        if: ${{ github.ref != 'refs/heads/main' }}
-        runs-on:
-            - mw
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v2
-            - name: Add Docker Metadata
-              uses: OIT/ais-action-add-dockerfile-metadata@main
-              with:
-                docker_files: './Dockerfile'
-            - name: Check if image exists
-              id: image-exists
-              uses: OIT/ais-action-docker-image-exists@main
-              if: ${{ github.ref != 'refs/heads/main' }}
-              with:
-                image: ${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
-                username: ${{ secrets.ARTIFACTORY_USERNAME }}
-                password: ${{ secrets.ARTIFACTORY_TOKEN }}
-                action: warn_when_found
-            - name: Kaniko build
-              id: kaniko-build-release
-              uses: aevea/action-kaniko@master
-              if: ${{ steps.image-exists.outputs.image-exists == 'false' }}
-              with:
-                image: ${{ env.DOCKER_IMAGE_NAME }}
-                registry: ${{ env.ARTIFACTORY_REGISTRY }}
-                username: ${{ secrets.ARTIFACTORY_USERNAME }}
-                password: ${{ secrets.ARTIFACTORY_TOKEN }}
-                cache: true
-                tag: ${{ github.ref_name }}
+      if: ${{ github.ref != 'refs/heads/main' }}
+      runs-on:
+        - mw
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v2
+        - name: Build Setup
+          uses: OIT/ais-action-build-setup@main
+          with:
+            github_token: ${{ secrets.CAD_GITHUB_PAT }}
+        - name: Add Docker Metadata
+          uses: OIT/ais-action-add-dockerfile-metadata@main
+          with:
+            docker_files: './Dockerfile'
+        - name: Check if image exists
+          id: image-exists
+          uses: OIT/ais-action-docker-image-exists@main
+          if: ${{ github.ref != 'refs/heads/main' }}
+          with:
+            image: ${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
+            username: ${{ secrets.ARTIFACTORY_USERNAME }}
+            password: ${{ secrets.ARTIFACTORY_TOKEN }}
+            action: warn_when_found
+        - name: Kaniko build
+          id: kaniko-build-release
+          uses: aevea/action-kaniko@master
+          if: ${{ steps.image-exists.outputs.image-exists == 'false' }}
+          with:
+            image: ${{ env.DOCKER_IMAGE_NAME }}
+            registry: ${{ env.ARTIFACTORY_REGISTRY }}
+            username: ${{ secrets.ARTIFACTORY_USERNAME }}
+            password: ${{ secrets.ARTIFACTORY_TOKEN }}
+            cache: true
+            tag: ${{ github.ref_name }}
     security-scan-latest:
-        if: ${{ github.ref == 'refs/heads/main' }}
-        runs-on:
-            - mw
-        needs:  build-and-push-latest
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v2
-            - name: Security Scan Image
-              uses: OIT/ais-action-image-security-scan@main
-              with:
-                github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
-                anchore_username: ${{ secrets.ANCHORE_USERNAME }}
-                anchore_password: ${{ secrets.ANCHORE_PASSWORD }}
-                images: ${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:latest
+      if: ${{ github.ref == 'refs/heads/main' }}
+      runs-on:
+        - mw
+      needs:  build-and-push-latest
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v2
+        - name: Security Scan Image
+          uses: OIT/ais-action-image-security-scan@main
+          with:
+            github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
+            anchore_username: ${{ secrets.ANCHORE_USERNAME }}
+            anchore_password: ${{ secrets.ANCHORE_PASSWORD }}
+            images: ${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:latest
     security-scan-release:
-        if: ${{ github.ref != 'refs/heads/main' }}
-        runs-on:
-            - mw
-        needs:  build-and-push-release
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v2
-            - name: Security Scan Image
-              uses: OIT/ais-action-image-security-scan@main
-              with:
-                github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
-                anchore_username: ${{ secrets.ANCHORE_USERNAME }}
-                anchore_password: ${{ secrets.ANCHORE_PASSWORD }}
-                images: ${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
+      if: ${{ github.ref != 'refs/heads/main' }}
+      runs-on:
+        - mw
+      needs:  build-and-push-release
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v2
+        - name: Security Scan Image
+          uses: OIT/ais-action-image-security-scan@main
+          with:
+            github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
+            anchore_username: ${{ secrets.ANCHORE_USERNAME }}
+            anchore_password: ${{ secrets.ANCHORE_PASSWORD }}
+            images: ${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
