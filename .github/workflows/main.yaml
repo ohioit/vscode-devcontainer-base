@@ -14,7 +14,7 @@ on:
       - 'main'
   release:
     types:
-      - created
+      - released
 
 jobs:
     build-and-push-latest:
@@ -24,10 +24,6 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v2
-        - name: Build Setup
-          uses: OIT/ais-action-build-setup@main
-          with:
-            github_token: ${{ secrets.CAD_GITHUB_PAT }}
         - name: Add Docker Metadata
           uses: OIT/ais-action-add-dockerfile-metadata@main
           with:
@@ -48,34 +44,32 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v2
-        - name: Build Setup
-          uses: OIT/ais-action-build-setup@main
-          with:
-            github_token: ${{ secrets.CAD_GITHUB_PAT }}
         - name: Add Docker Metadata
           uses: OIT/ais-action-add-dockerfile-metadata@main
           with:
             docker_files: './Dockerfile'
+        - name: Dump Environment
+          run: env | sort
         - name: Check if image exists
           id: image-exists
           uses: OIT/ais-action-docker-image-exists@main
           if: ${{ github.ref != 'refs/heads/main' }}
           with:
-            image: ${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
+            images: "${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.release.tag_name }}"
             username: ${{ secrets.ARTIFACTORY_USERNAME }}
             password: ${{ secrets.ARTIFACTORY_TOKEN }}
             action: warn_when_found
         - name: Kaniko build
           id: kaniko-build-release
           uses: aevea/action-kaniko@master
-          if: ${{ steps.image-exists.outputs.image-exists == 'false' }}
+          if: ${{ steps.image-exists.outputs.image_exists == 'false' }}
           with:
             image: ${{ env.DOCKER_IMAGE_NAME }}
             registry: ${{ env.ARTIFACTORY_REGISTRY }}
             username: ${{ secrets.ARTIFACTORY_USERNAME }}
             password: ${{ secrets.ARTIFACTORY_TOKEN }}
             cache: true
-            tag: ${{ github.ref_name }}
+            tag: ${{ github.event.release.tag_name }}
     security-scan-latest:
       if: ${{ github.ref == 'refs/heads/main' }}
       runs-on:
@@ -105,4 +99,4 @@ jobs:
             github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
             anchore_username: ${{ secrets.ANCHORE_USERNAME }}
             anchore_password: ${{ secrets.ANCHORE_PASSWORD }}
-            images: ${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
+            images: ${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.release.tag_name }}
