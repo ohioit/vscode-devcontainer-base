@@ -18,6 +18,8 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         zsh \
         shellcheck \
         jq \
+        netcat \
+        dnsutils \
         python3.9 \
         python3-pip \
         locales \
@@ -49,18 +51,18 @@ RUN groupadd -g $USER_GID $USERNAME && \
     echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME && \
     chmod 0440 /etc/sudoers.d/$USERNAME
 
-ARG SKAFFOLD_VERSION=v1.34.0
+ARG SKAFFOLD_VERSION=v1.35.1
 
 RUN curl -Lo /usr/local/bin/skaffold https://github.com/GoogleContainerTools/skaffold/releases/download/${SKAFFOLD_VERSION}/skaffold-linux-$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/skaffold
 
-ARG KUBECTL_VERSION=v1.19.0
+ARG KUBECTL_VERSION=v1.20.0
 
 RUN curl -LO https://storage.googleapis.com/kubernetes-release/release/${KUBECTL_VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl && \
     chmod +x ./kubectl && \
     mv ./kubectl /usr/local/bin/kubectl
 
-ARG HELM_VERSION=v3.7.1
+ARG HELM_VERSION=v3.7.2
 
 RUN curl -Lo /tmp/helm.tar.gz https://get.helm.sh/helm-${HELM_VERSION}-linux-$(dpkg --print-architecture).tar.gz && \
     tar -C /tmp -zxvf /tmp/helm.tar.gz && \
@@ -68,7 +70,7 @@ RUN curl -Lo /tmp/helm.tar.gz https://get.helm.sh/helm-${HELM_VERSION}-linux-$(d
     rm -Rf /tmp/helm.tar.gz /tmp/linux-$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/helm
 
-ARG KUBESEAL_VERSION=v0.16.0
+ARG KUBESEAL_VERSION=v0.17.1
 RUN curl -Lo /tmp/kubeseal https://github.com/bitnami-labs/sealed-secrets/releases/download/${KUBESEAL_VERSION}/kubeseal-linux-$(dpkg --print-architecture) && \
     install -m 755 /tmp/kubeseal /usr/local/bin/kubeseal
 
