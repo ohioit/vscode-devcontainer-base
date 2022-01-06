@@ -70,8 +70,9 @@ RUN curl -Lo /tmp/helm.tar.gz https://get.helm.sh/helm-${HELM_VERSION}-linux-$(d
     rm -Rf /tmp/helm.tar.gz /tmp/linux-$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/helm
 
-ARG KUBESEAL_VERSION=v0.17.1
-RUN curl -Lo /tmp/kubeseal https://github.com/bitnami-labs/sealed-secrets/releases/download/${KUBESEAL_VERSION}/kubeseal-linux-$(dpkg --print-architecture) && \
+ARG KUBESEAL_VERSION=0.17.1
+RUN curl -Lo /tmp/kubeseal.tar.gz https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KUBESEAL_VERSION}/kubeseal-${KUBESEAL_VERSION}-linux-$(dpkg --print-architecture).tar.gz && \
+    tar -C /tmp -zxvf /tmp/kubeseal.tar.gz && \
     install -m 755 /tmp/kubeseal /usr/local/bin/kubeseal
 
 COPY setup-container.sh /usr/local/bin/setup-container
