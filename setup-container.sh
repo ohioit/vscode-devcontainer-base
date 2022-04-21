@@ -73,6 +73,7 @@ else
     done
 fi
 
+# Post config hooks
 if [[ -d "${POST_CONFIG_HOOKS}" ]] && [ "$(ls -A "${POST_CONFIG_HOOKS}")" ]; then
     echo "Running image post-configure hooks..."
     for HOOK in "${POST_CONFIG_HOOKS}"/*; do
