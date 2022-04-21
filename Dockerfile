@@ -27,6 +27,8 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         ca-certificates \
         software-properties-common \
         vim \
+        wget \
+        chroma \
         less && \
     pip3 install yq && \
     sed -i '/'${LANG}'/s/^# //g' /etc/locale.gen && \
@@ -51,43 +53,35 @@ RUN groupadd -g $USER_GID $USERNAME && \
     echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME && \
     chmod 0440 /etc/sudoers.d/$USERNAME
 
-ARG SKAFFOLD_VERSION=v1.35.1
-
-RUN curl -Lo /usr/local/bin/skaffold https://github.com/GoogleContainerTools/skaffold/releases/download/${SKAFFOLD_VERSION}/skaffold-linux-$(dpkg --print-architecture) && \
-    chmod +x /usr/local/bin/skaffold
-
-ARG KUBECTL_VERSION=v1.20.0
-
-RUN curl -LO https://storage.googleapis.com/kubernetes-release/release/${KUBECTL_VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl && \
-    chmod +x ./kubectl && \
-    mv ./kubectl /usr/local/bin/kubectl
-
-ARG HELM_VERSION=v3.7.2
-
-RUN curl -Lo /tmp/helm.tar.gz https://get.helm.sh/helm-${HELM_VERSION}-linux-$(dpkg --print-architecture).tar.gz && \
-    tar -C /tmp -zxvf /tmp/helm.tar.gz && \
-    mv /tmp/linux-$(dpkg --print-architecture)/helm /usr/local/bin && \
-    rm -Rf /tmp/helm.tar.gz /tmp/linux-$(dpkg --print-architecture) && \
-    chmod +x /usr/local/bin/helm
-
+ARG SKAFFOLD_VERSION=1.38.0
+ARG KUBECTL_VERSION=1.20.0
+ARG HELM_VERSION=3.7.2
 ARG KUBESEAL_VERSION=0.17.1
-RUN curl -Lo /tmp/kubeseal.tar.gz https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KUBESEAL_VERSION}/kubeseal-${KUBESEAL_VERSION}-linux-$(dpkg --print-architecture).tar.gz && \
-    tar -C /tmp -zxvf /tmp/kubeseal.tar.gz && \
-    install -m 755 /tmp/kubeseal /usr/local/bin/kubeseal
+
+COPY install-system-dependencies.sh /usr/local/bin/install-system-dependencies
+RUN chmod +x /usr/local/bin/install-system-dependencies && \
+    /usr/local/bin/install-system-dependencies
+
+COPY install-user-dependencies.sh /usr/local/bin/install-user-dependencies
+RUN chmod +x /usr/local/bin/install-user-dependencies
+
+USER ${USER_UID}
+
+RUN /usr/local/bin/install-user-dependencies
+
+COPY --chown=vscode:vscode zshrc.zsh /home/vscode/.zshrc
+COPY --chown=vscode:vscode zsh-aliases.zsh /home/vscode/.zsh-aliases.zsh
+COPY --chown=vscode:vscode p10k.zsh /home/vscode/.p10k.zsh
+
+USER 0
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint
 
 COPY setup-container.sh /usr/local/bin/setup-container
-RUN chmod +x /usr/local/bin/setup-container && \
+RUN chmod u+rwx,g+rx,o+rx /usr/local/bin/setup-container /usr/local/bin/docker-entrypoint && \
     mkdir /home/vscode/.docker /home/vscode/.kube && \
     chown ${USER_UID}:${USER_GID} /home/vscode/.docker /home/vscode/.kube && \
     mkdir -p /usr/local/lib/devcontainer/hooks.d/pre-start && \
     mkdir -p /usr/local/lib/devcontainer/hooks.d/post-start
 
-USER ${USER_UID}
-
-RUN sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-RUN test "${HAVE_NERD_GLYPHS}" = "true" && sed -ri 's/ZSH_THEME=.*/ZSH_THEME="agnoster"/' /home/vscode/.zshrc || true
-RUN echo 'source ~/.zsh-aliases' >> ~/.zshrc
-
-COPY zsh-aliases.sh /home/vscode/.zsh-aliases
-
-USER 0
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint"]

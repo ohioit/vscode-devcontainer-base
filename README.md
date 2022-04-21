@@ -13,8 +13,8 @@ following additions:
 - Visual studio code user configured as uid and gid `1000:1000`.
 - Visual studio code user having passwordless sudo.
 - Key aliases to transparently use docker and kubectl tools.
-- Post-start script that properly configures docker credentials and
-  kubeconfig.
+- Post-start script that properly configures docker credentials,
+  kubeconfig and helm.
 
 > Note: This devcontainer may only work on Linux, Mac OS, and inside
 > of WSL on Windows. It will likely fail outside of WSL.
@@ -41,6 +41,30 @@ your credentials unencrypted in a text file on your machine**.
 
 Alternatively, you can run `docker login` when you're inside the container
 which will be nuked when the container dies.
+
+## Helm Credentials
+
+In order for Helm to be able to access Artifactory inside of the container,
+you'll need to be sure you've done a `helm repo add` for artifactory on your host
+first, you can do that with:
+
+```bash
+helm repo add artifactory https://artifactory.oit.ohio.edu/artifactory/helm --username=${YOUR_OHIO_ID}
+```
+
+Remember that your password must be your Artifactory API Key,not your Ohio Password.
+
+> Note: In order to push helm charts to Artifactory, you will also have to login to a separate
+> "push" repository, you can do that with:
+>
+> ```bash
+> helm repo add artifactory-push https://artifactory.oit.ohio.edu/artifactory/oit-helm --username=${YOUR_OHIO_ID}
+> ```
+
+## Kubernetes credentials
+
+In order for `kubectl` to work properly, you must have a working `~/.kube/config` file. You can
+generate one from https://rancher.oit.ohio.edu.
 
 ## Usage
 
@@ -76,19 +100,19 @@ Then create a `.devcontainer/devcontainer.json` file like the following:
     // The following three are very important
     "postCreateCommand": "/usr/local/bin/setup-container",
     "remoteUser": "vscode",
+    "remoteEnv": {
+        "HOST_HOME": "${localEnv:HOME}"
+    },
     "mounts": [
         "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
-        "source=${env:HOME}/.kube/config,target=/home/vscode/.kube/hostconfig,type=bind",
-        "source=${env:HOME}/.docker/config.json,target=/home/vscode/.docker/hostconfig.json,type=bind",
-        "source=${env:HOME}/.ssh,target=/home/vscode/.ssh,type=bind"
+        "source=${localEnv:HOME},target=${localEnv:HOME},type=bind,readonly"
     ]
-
 }
 ```
 
-> Note that the configurations above mount to `hostconfig` instead of the
-> actual config file path. This is because these files need some munging to work
-> properly, which `setup-container.sh` takes care of.
+> Note that it is important that `HOST_HOME` be set correctly and that your
+> home directory is mounted into the value of `HOST_HOME` or startup scripts
+> will fail to setup credentials properly.
 
 ## Hooks
 
@@ -100,3 +124,25 @@ place files into the appropriate directory in the container during your build.
 PRE_CONFIG_HOOKS=/usr/local/lib/devcontainer/hooks.d/pre-start
 POST_CONFIG_HOOKS=/usr/local/lib/devcontainer/hooks.d/post-start
 ```
+
+In addition to container level hooks, you can also have hooks that run
+only on your machine utilizing the "user hooks". To do this,
+place a shell script in either `~/.devcontainer/hooks.d/pre-start` or
+`~/.devcontainer/hooks.d/post-start`. Note that any command that accesses
+content in your home directory may need to run using `sudo`.
+
+Your home directory is mounted readonly with the same path in the container
+as on your host. That is, `/Users/{username}` on Mac OS X and `/home/{username}`
+on Linux and WSL.
+
+An example of a simple hook that will override the internal
+[PowerLevel10k](https://github.com/romkatv/powerlevel10k) shell prompt configuration
+might look like this:
+
+```bash
+#!/bin/zsh
+sudo cp "${HOST_HOME}/.p10k.zsh" /home/vscode/.p10k.zsh
+sudo chown vscode:vscode /home/vscode/.p10k.zsh
+```
+
+This might be placed in the directory `/home/username/.devcontainer/hooks.d/post-start/p10k.sh`.
