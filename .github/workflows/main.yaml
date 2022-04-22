@@ -29,7 +29,7 @@ jobs:
           with:
             docker_files: './Dockerfile'
         - name: Kaniko build
-          uses: OIT/ais-action-kaniko
+          uses: OIT/ais-action-kaniko@main
           with:
             image: ${{ env.DOCKER_IMAGE_NAME }}
             registry: ${{ env.ARTIFACTORY_REGISTRY }}
@@ -61,7 +61,7 @@ jobs:
             action: warn_when_found
         - name: Kaniko build
           id: kaniko-build-release
-          uses: OIT/ais-action-kaniko
+          uses: OIT/ais-action-kaniko@main
           if: ${{ steps.image-exists.outputs.image_exists == 'false' }}
           with:
             image: ${{ env.DOCKER_IMAGE_NAME }}
