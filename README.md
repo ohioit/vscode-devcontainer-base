@@ -44,22 +44,15 @@ which will be nuked when the container dies.
 
 ## Helm Credentials
 
-In order for Helm to be able to access Artifactory inside of the container,
-you'll need to be sure you've done a `helm repo add` for artifactory on your host
+In order for Helm to be able to access your private docker registry inside of the container,
+you'll need to be sure you've done a `helm repo add` for any private registry on your host
 first, you can do that with:
 
 ```bash
-helm repo add artifactory https://artifactory.oit.ohio.edu/artifactory/helm --username=${YOUR_OHIO_ID}
+helm repo add artifactory ${REGISTRY_URL} --username=${YOUR_OHIO_ID}
 ```
 
-Remember that your password must be your Artifactory API Key,not your Ohio Password.
-
-> Note: In order to push helm charts to Artifactory, you will also have to login to a separate
-> "push" repository, you can do that with:
->
-> ```bash
-> helm repo add artifactory-push https://artifactory.oit.ohio.edu/artifactory/oit-helm --username=${YOUR_OHIO_ID}
-> ```
+Your password must be an API key or personal access token, not your Ohio password.
 
 ## Kubernetes credentials
 

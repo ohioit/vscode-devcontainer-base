@@ -3,8 +3,6 @@ name: Build and Publish Image
 env:
   ARTIFACTORY_REGISTRY: docker.artifactory.oit.ohio.edu
   GITHUB_ACCESS_TOKEN: ${{ secrets.CAD_GITHUB_PAT }}
-  # TODO: Detect the image from skaffold.yaml
-  DOCKER_IMAGE_NAME: ais/vscode-devcontainer-base
 
 on:
   push:
@@ -20,23 +18,22 @@ jobs:
     build-and-push-latest:
       if: ${{ github.ref == 'refs/heads/main' }}
       runs-on:
-        - mw
+        - academic
       steps:
         - name: Checkout
           uses: actions/checkout@v2
-        - name: Add Docker Metadata
-          uses: OIT/ais-action-add-dockerfile-metadata@main
+        - name: Build necessary docker images
+          # You may pin to the exact commit or the version.
+          # uses: hiberbee/github-action-skaffold@390ff09081c63781da0e9eadd6b8506065f14fc7
+          uses: hiberbee/github-action-skaffold@1.19.0
           with:
-            docker_files: './Dockerfile'
-        - name: Kaniko build
-          uses: OIT/ais-action-kaniko@main
-          with:
-            image: ${{ env.DOCKER_IMAGE_NAME }}
-            registry: ${{ env.ARTIFACTORY_REGISTRY }}
-            username: ${{ secrets.ARTIFACTORY_USERNAME }}
-            password: ${{ secrets.ARTIFACTORY_TOKEN }}
+            skaffold-version: 1.39.1
+            container-structure-test-version: 1.11.0
+            command: build
+            push: true
             cache: true
             tag: latest
+
     build-and-push-release:
       if: ${{ github.ref != 'refs/heads/main' }}
       runs-on:
@@ -44,59 +41,14 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v2
-        - name: Add Docker Metadata
-          uses: OIT/ais-action-add-dockerfile-metadata@main
+        - name: Build necessary docker images
+          # You may pin to the exact commit or the version.
+          # uses: hiberbee/github-action-skaffold@390ff09081c63781da0e9eadd6b8506065f14fc7
+          uses: hiberbee/github-action-skaffold@1.19.0
           with:
-            docker_files: './Dockerfile'
-        - name: Dump Environment
-          run: env | sort
-        - name: Check if image exists
-          id: image-exists
-          uses: OIT/ais-action-docker-image-exists@main
-          if: ${{ github.ref != 'refs/heads/main' }}
-          with:
-            images: "${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.release.tag_name }}"
-            username: ${{ secrets.ARTIFACTORY_USERNAME }}
-            password: ${{ secrets.ARTIFACTORY_TOKEN }}
-            action: warn_when_found
-        - name: Kaniko build
-          id: kaniko-build-release
-          uses: OIT/ais-action-kaniko@main
-          if: ${{ steps.image-exists.outputs.image_exists == 'false' }}
-          with:
-            image: ${{ env.DOCKER_IMAGE_NAME }}
-            registry: ${{ env.ARTIFACTORY_REGISTRY }}
-            username: ${{ secrets.ARTIFACTORY_USERNAME }}
-            password: ${{ secrets.ARTIFACTORY_TOKEN }}
+            skaffold-version: 1.39.1
+            container-structure-test-version: 1.11.0
+            command: build
+            push: true
             cache: true
-            tag: ${{ github.event.release.tag_name }}
-    security-scan-latest:
-      if: ${{ github.ref == 'refs/heads/main' }}
-      runs-on:
-        - mw
-      needs:  build-and-push-latest
-      steps:
-        - name: Checkout
-          uses: actions/checkout@v2
-        - name: Security Scan Image
-          uses: OIT/ais-action-image-security-scan@main
-          with:
-            github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
-            anchore_username: ${{ secrets.ANCHORE_USERNAME }}
-            anchore_password: ${{ secrets.ANCHORE_PASSWORD }}
-            images: ${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:latest
-    security-scan-release:
-      if: ${{ github.ref != 'refs/heads/main' }}
-      runs-on:
-        - mw
-      needs:  build-and-push-release
-      steps:
-        - name: Checkout
-          uses: actions/checkout@v2
-        - name: Security Scan Image
-          uses: OIT/ais-action-image-security-scan@main
-          with:
-            github_access_token: ${{ secrets.CAD_GITHUB_PAT }}
-            anchore_username: ${{ secrets.ANCHORE_USERNAME }}
-            anchore_password: ${{ secrets.ANCHORE_PASSWORD }}
-            images: ${{ env.ARTIFACTORY_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.release.tag_name }}
+            tag: ${{ github.ref_name }}

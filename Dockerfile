@@ -6,7 +6,6 @@ ARG USER_GID=1000
 ARG LANG=en_US.UTF-8
 ARG LANGUAGE=en_US.UTF-8
 ARG LC_ALL=en_US.UTF-8
-ARG HAVE_NERD_GLYPHS=false
 
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
