@@ -1,0 +1,28 @@
+{
+    "name": "Test Container",
+    "context": "..",
+    "dockerFile": "../Dockerfile",
+    "features": {
+        "ghcr.io/devcontainers/features/docker-outside-of-docker": {}
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "editorconfig.editorconfig",
+                "davidanson.vscode-markdownlint",
+                "timonwong.shellcheck",
+                "redhat.vscode-yaml",
+                "eamodio.gitlens",
+                "ms-azuretools.vscode-docker"
+            ]
+        }
+    },
+    "postCreateCommand": "/usr/local/bin/setup-container",
+    "remoteUser": "vscode",
+    "remoteEnv": {
+        "HOST_HOME": "${localEnv:HOME}"
+    },
+    "mounts": [
+        "source=${localEnv:HOME},target=${localEnv:HOME},type=bind,readonly"
+    ]
+}

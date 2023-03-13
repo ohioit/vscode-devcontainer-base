@@ -19,30 +19,12 @@ if [[ -d "${PRE_CONFIG_HOOKS}" ]] && [ "$(ls -A "${PRE_CONFIG_HOOKS}")" ]; then
 fi
 
 mkdir -p /home/vscode/.docker /home/vscode/.kube /home/vscode/.config/helm || true
-sudo mkdir -p /root/.config || true
-
-sudo ln -sf /home/vscode/.docker /root/.docker
-sudo ln -sf /home/vscode/.kube /root/.kube
-sudo ln -sf /home/vscode/.config/helm /root/.config/helm
-
-echo "Setting up Docker..."
-if [[ -e /var/run/docker.sock ]]; then
-    sudo groupadd -r -g "$(stat -c '%g' /var/run/docker.sock)" docker
-    sudo gpasswd -a vscode docker
-fi
 
 if [[ -z "${HOST_HOME}" ]]; then
     echo "Warning: HOST_HOME environment variable is not, unable to setup user customizations. This means that things like docker, helm, kubectl, and skaffold will not work" 1>&2
 elif [[ ! -d "${HOST_HOME}" ]]; then
     echo "Warning: Your home directory does not seem to be available at ${HOST_HOME}. This means things like docker, helm, kubectl, and skaffold will not work" 1>&2
 else
-    echo "Setting up Docker credentials..."
-    if [[ -e "${HOST_HOME}/.docker/config.json" ]]; then
-        sudo jq 'del(.credsStore)' "${HOST_HOME}/.docker/config.json" > /home/vscode/.docker/config.json
-    else
-        echo "Warning: Docker credentials not found in ${HOST_HOME}/.docker/config.json, you will be unable to use Artifactory until this is setup." 1>&2
-    fi
-
     echo "Setting up Kubernetes..."
 
     if [[ ! -e "${HOST_HOME}/.kube/config" ]]; then

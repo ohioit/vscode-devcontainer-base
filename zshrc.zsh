@@ -59,12 +59,8 @@ elif [[ -n "$(which kubectl 2>/dev/null)" ]]; then
 	source "$HOME/.zsh/kubernetes.sh"
 fi
 
-export KUBERNETES_DIAGNOSTIC_IMAGE=docker.arifactory.oit.ohio.edu/ais/cicdtools
-export KUBERNETES_DIAGNOSTIC_SECRET=artifactory
-
 alias pretty="ccat"
 alias git-oops="git add . && git commit --amend --no-edit -a && git push --force"
-alias kdiag="kubectl run diag --delete --image=${KUBERNETES_DIAGNOSTIC_IMAGE} --command -t --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"${KUBERNETES_DIAGNOSTIC_SECRET}\"}]}}' -i --attach --rm"
 
 source "${HOME}/.zsh-aliases.zsh"
 
