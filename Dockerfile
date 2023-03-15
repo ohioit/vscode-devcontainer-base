@@ -1,5 +1,7 @@
 FROM ubuntu:22.04
 
+LABEL org.opencontainers.image.source https://github.com/ohioit/vscode-devcontainer-base
+
 ARG USERNAME=vscode
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -83,3 +85,4 @@ RUN chmod u+rwx,g+rx,o+rx /usr/local/bin/setup-container /usr/local/bin/docker-e
     mkdir -p /usr/local/lib/devcontainer/hooks.d/post-start
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint"]
+
