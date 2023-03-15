@@ -36,8 +36,8 @@ else
 
     echo "Setting up Helm..."
 
+    HELM_REPOSITORIES_YAML=/home/vscode/.config/helm/repositories.yaml
     if [[ -e "${HOST_HOME}/.config/helm/repositories.yaml" ]]; then
-        HELM_REPOSITORIES_YAML=/home/vscode/.config/helm/repositories.yaml
         sudo cp "${HOST_HOME}/.config/helm/repositories.yaml" "${HELM_REPOSITORIES_YAML}"
         sudo chown vscode:vscode "${HELM_REPOSITORIES_YAML}"
     else
@@ -47,8 +47,9 @@ else
     for WORKSPACE in /workspaces/*; do
         if [[ -e "${WORKSPACE}/helm/Chart.yaml" ]]; then
             for DEPENDENCY in $(helm dep list "${WORKSPACE}/helm" | grep -v NAME | awk '{ print $3 }'); do
-                if ! [[ -e "${HELM_REPOSITORIES_YAML}" ]] || ! [[ "$(yq -r '.repositories[].url' ${HELM_REPOSITORIES_YAML})" =~ "${DEPENDENCY}"$ ]]; then
-                    helm repo add "${DEPENDENCY}" "${DEPENDENCY}"
+                if ! [[ -e "${HELM_REPOSITORIES_YAML}" ]] || ! (yq -r '.repositories[].url' "${HELM_REPOSITORIES_YAML}" | grep -q '^'"${DEPENDENCY}"'$'); then
+                    DEPENDENCY_NAME=$(echo "${DEPENDENCY}" | sed -r 's/https?:\/\/(.*)/\1/' | sed -r 's/[\,\/]/-/g')
+                    helm repo add "${DEPENDENCY_NAME}" "${DEPENDENCY}"
                 fi
             done
         fi
