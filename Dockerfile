@@ -53,6 +53,7 @@ ARG SKAFFOLD_VERSION=2.2.0
 ARG KUBECTL_VERSION=1.24.0
 ARG HELM_VERSION=3.11.2
 ARG KUBESEAL_VERSION=0.19.5
+ARG K9S_VERSION=0.27.3
 
 COPY install-system-dependencies.sh /usr/local/bin/install-system-dependencies
 RUN chmod +x /usr/local/bin/install-system-dependencies && \
