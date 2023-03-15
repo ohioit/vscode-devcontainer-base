@@ -8,13 +8,25 @@ following additions:
 
 - Timezone and Locale support
 - Base packages like curl, git, sudo, zsh, python, etc.
-- Docker client
 - Skaffold, Helm, and kubectl
 - Visual studio code user configured as uid and gid `1000:1000`.
 - Visual studio code user having passwordless sudo.
-- Key aliases to transparently use docker and kubectl tools.
-- Post-start script that properly configures docker credentials,
-  kubeconfig and helm.
+- Post-start script that properly configures kubeconfig and helm.
+- Various kubectl plugins and a comfortable `zsh` based shell.
+
+The container no longer provides docker but is fully compatible
+with the [docker-outside-of-docker](https://github.com/devcontainers/features/tree/main/src/docker-outside-of-docker)
+feature. Simply add the following to your `.devcontainer.json`:
+
+```json
+"features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+}
+```
+
+Reminder: Legacy versions of this container expected the `.devcontainer.json`
+to mount the docker socket. **You must remove that mount from legacy
+devcontainers.**
 
 > Note: This devcontainer may only work on Linux, Mac OS, and inside
 > of WSL on Windows. It will likely fail outside of WSL.
@@ -30,17 +42,8 @@ and anyone can start a root container. Just be careful.
 
 ## Docker Credentials
 
-In order for Docker credentials to work properly inside of a devcontainer,
-they must be captured inside Docker's `config.json`. If you use `docker login`
-with a credentials store configured, it's very likely this will not work
-since the credentials are stored in your system keychain.
-
-You will likely have to remove the `credsStore` property in your
-`config.json` and do `docker login` again. **However, this will store
-your credentials unencrypted in a text file on your machine**.
-
-Alternatively, you can run `docker login` when you're inside the container
-which will be nuked when the container dies.
+Visual Studio Code now correctly sets up Docker credentials when
+inside a devcontainer.
 
 ## Helm Credentials
 
@@ -52,18 +55,71 @@ first, you can do that with:
 helm repo add artifactory ${REGISTRY_URL} --username=${YOUR_OHIO_ID}
 ```
 
-Your password must be an API key or personal access token, not your Ohio password.
+Your password must be an API key or personal access token, not your Ohio password. Note
+that these do not currently work in Codespaces.
 
 ## Kubernetes credentials
 
 In order for `kubectl` to work properly, you must have a working `~/.kube/config` file. You can
-generate one from https://rancher.oit.ohio.edu.
+generate one from Rancher. Note that these do not currently work in Codespaces.
 
-## Usage
+## Usage as in GitHub Codespaces and Visual Studio Code
 
-To use this, first create a `Dockerfile` inside of a `.devcontainer`
-directory at the root of your project, use this image as the from
-line:
+For basic usage, simply create a `.devcontainer/devcontainer.json`
+in your repository that looks like the following:
+
+```json
+{
+    "name": "Devcontainer",
+    "image": "ghcr.io/ohioit/vscode-devcontainer/base",
+    "features": {
+        "ghcr.io/devcontainers/features/docker-outside-of-docker": {}
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "editorconfig.editorconfig",
+                "davidanson.vscode-markdownlint",
+                "timonwong.shellcheck",
+                "redhat.vscode-yaml",
+                "eamodio.gitlens",
+                "ms-azuretools.vscode-docker"
+            ]
+        }
+    },
+    "postCreateCommand": "/usr/local/bin/setup-container",
+    "remoteUser": "vscode",
+    "remoteEnv": {
+        "HOST_HOME": "${localEnv:HOME}"
+    },
+    "mounts": [
+        "source=${localEnv:HOME},target=${localEnv:HOME},type=bind,readonly"
+    ]
+}
+```
+
+Be sure to customize the `extensions` property to add any extensions you'd like
+to automatically install into your container.
+
+### Container Customizations
+
+If you'd like to build your own container, you can use this as a base.
+First, change your `.devcontainer.json` so that it builds the image
+instead of using the image directly:
+
+```json
+...
+"name": "Devcontainer",
+"build": {
+    "dockerFile": "Dockerfile"
+},
+"features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker": {}
+},
+...
+```
+
+Then, create a `Dockerfile` in `.devcontainer` using the base image, like this:
 
 ```dockerfile
 FROM docker.artifactory.oit.ohio.edu/ais/vscode-devcontainer-base:VERSION
@@ -79,35 +135,7 @@ USER 0
 # Do not set an entrypoint
 ```
 
-Then create a `.devcontainer/devcontainer.json` file like the following:
-
-```json
-{
-    "name": "Your Container Name",
-    "build": {
-        "dockerFile": "Dockerfile"
-    },
-    "extensions": [
-        // List of extension IDs to install
-    ],
-    // The following three are very important
-    "postCreateCommand": "/usr/local/bin/setup-container",
-    "remoteUser": "vscode",
-    "remoteEnv": {
-        "HOST_HOME": "${localEnv:HOME}"
-    },
-    "mounts": [
-        "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
-        "source=${localEnv:HOME},target=${localEnv:HOME},type=bind,readonly"
-    ]
-}
-```
-
-> Note that it is important that `HOST_HOME` be set correctly and that your
-> home directory is mounted into the value of `HOST_HOME` or startup scripts
-> will fail to setup credentials properly.
-
-## Hooks
+### Hooks
 
 The setup script supports two hooks, pre and post configuration. To run
 hooks before anything else in the script or after everything is done,
@@ -139,3 +167,37 @@ sudo chown vscode:vscode /home/vscode/.p10k.zsh
 ```
 
 This might be placed in the directory `/home/username/.devcontainer/hooks.d/post-start/p10k.sh`.
+
+## Other Usages
+
+This image is designed to _also_ be run directly. Simply use docker to run
+
+```bash
+docker run -ti --rm ghcr.io/ohioit/vscode-devcontainer-base
+```
+
+The container will start the shell by default. This can be useful to have access to the
+tools in some cases. In addition, it can be used to help debug things in a Kubernetes cluster.
+In this case, use the `/usr/local/bin/wait-for-death` entrypoint to help the container
+start and shut down gracefully. Here's an example deployment:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test
+  template:
+    metadata:
+      labels:
+        app: test
+    spec:
+      containers:
+        - name: test
+          image: ghcr.io/ohioit/vscode-devcontainer-base
+          command: ["/usr/local/bin/wait-for-death"]
+```

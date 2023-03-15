@@ -78,7 +78,10 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint
 COPY wait-for-death.sh /usr/local/bin/wait-for-death
 COPY setup-container.sh /usr/local/bin/setup-container
 
-RUN chmod u+rwx,g+rx,o+rx /usr/local/bin/setup-container /usr/local/bin/docker-entrypoint && \
+RUN chmod u+rwx,g+rx,o+rx \
+        /usr/local/bin/setup-container \
+        /usr/local/bin/docker-entrypoint \
+        /usr/local/bin/wait-for-death && \
     mkdir /home/vscode/.docker /home/vscode/.kube && \
     chown ${USER_UID}:${USER_GID} /home/vscode/.docker /home/vscode/.kube && \
     mkdir -p /usr/local/lib/devcontainer/hooks.d/pre-start && \
