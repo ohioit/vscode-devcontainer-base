@@ -196,6 +196,7 @@ spec:
       labels:
         app: test
     spec:
+      imagePullPolicy: Always
       containers:
         - name: test
           image: ghcr.io/ohioit/vscode-devcontainer-base
