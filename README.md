@@ -71,7 +71,7 @@ in your repository that looks like the following:
 ```json
 {
     "name": "Devcontainer",
-    "image": "ghcr.io/ohioit/vscode-devcontainer/base",
+    "image": "ghcr.io/ohioit/vscode-devcontainer-base",
     "features": {
         "ghcr.io/devcontainers/features/docker-outside-of-docker": {}
     },
