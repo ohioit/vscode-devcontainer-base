@@ -30,6 +30,7 @@ else
     if [[ ! -e "${HOST_HOME}/.kube/config" ]]; then
         echo "Warning: Kubeconfig not found in ${HOST_HOME}/.kube/config. Pleaese go to https://rancher.oit.ohio.edu and setup your local kubeconfig. Your Kubernetes cluster will not be accessible until you do this and restart this container." 1>&2
     else
+        echo "✓ Found kubeconfig at ${HOST_HOME}/.kube/config"
         sudo cp "${HOST_HOME}/.kube/config" /home/vscode/.kube/config
         sudo chown vscode:vscode /home/vscode/.kube/config
     fi
@@ -37,7 +38,15 @@ else
     echo "Setting up Helm..."
 
     HELM_REPOSITORIES_YAML=/home/vscode/.config/helm/repositories.yaml
-    if [[ -e "${HOST_HOME}/.config/helm/repositories.yaml" ]]; then
+    HOST_HELM_REPOSITORIES_YAML=""
+    for HOST_HELM in "${HOST_HOME}/.config/helm/repositories.yaml" "${HOST_HOME}/Library/Preferences/helm/repositories.yaml"; do
+        if [[ -e "${HOST_HELM}" ]]; then
+            HOST_HELM_REPOSITORIES_YAML="${HOST_HELM}"
+            echo "✓ Found Helm repositories configuration at ${HOST_HELM_REPOSITORIES_YAML}"
+        fi
+    done
+
+    if [[ -n "${HOST_HELM_REPOSITORIES_YAML}" ]]; then
         sudo cp "${HOST_HOME}/.config/helm/repositories.yaml" "${HELM_REPOSITORIES_YAML}"
         sudo chown vscode:vscode "${HELM_REPOSITORIES_YAML}"
     else
@@ -49,6 +58,7 @@ else
             for DEPENDENCY in $(helm dep list "${WORKSPACE}/helm" | grep -v NAME | awk '{ print $3 }'); do
                 if ! [[ -e "${HELM_REPOSITORIES_YAML}" ]] || ! (yq -r '.repositories[].url' "${HELM_REPOSITORIES_YAML}" | grep -q '^'"${DEPENDENCY}"'$'); then
                     DEPENDENCY_NAME=$(echo "${DEPENDENCY}" | sed -r 's/https?:\/\/(.*)/\1/' | sed -r 's/[\,\/]/-/g')
+                    echo "Adding Helm repository for ${DEPENDENCY_NAME} from current project."
                     helm repo add "${DEPENDENCY_NAME}" "${DEPENDENCY}"
                 fi
             done
@@ -78,4 +88,4 @@ if [[ -d "${HOST_HOME}" ]]; then
     echo "Note: Your host home directory is avaialble at ${HOST_HOME}"
 fi
 
-echo "Container setup done! Please close this window."
+echo "✓ Container setup done! Please close this window."

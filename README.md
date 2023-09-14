@@ -40,12 +40,108 @@ container, and to your docker engine.
 However, in order to run docker, you need to be able to do root things
 and anyone can start a root container. Just be careful.
 
-## Docker Credentials
+## Workstation Setup
+
+Before you can start, you need to install a few packages locally.
+You will need git and docker (or podman maybe) at bare minimum.
+
+### Linux
+
+Install git, if not already available.
+
+- RedHat/CentOS/Fedora: `dnf install -y git`
+- Debian/Ubuntu: `apt install -y git`
+
+Install docker (or podman maybe).
+
+- RedHat/CentOS/Fedora: [Install Docker](https://docs.docker.com/engine/install/centos/)
+or `dnf install -y podman podman-docker`
+- Debian/Ubuntu: `apt install -y docker docker.io` or `apt install -y podman
+  podman-docker`
+
+> Note: When using Docker, your local user will have to be in the `docker`
+> group to use docker. You can use `id {user}` to see if your user is
+> already in the group and `sudo gpasswd -a {user} docker` to add
+> yourself to the group.
+>
+> You will likely need to logout and back in before your desktop notices
+> the change.
+
+### Mac
+
+We recommend using [Homebrew](https://brew.sh/) to install the required
+packages.
+
+``` bash
+brew install git
+brew install docker
+```
+
+### Windows
+
+For the best container experience on Windows, you'll need to setup WSL.
+Once you have a working WSL environment, you can proceed with the Linux
+steps above.
+
+#### WSL
+
+Windows Subsystem for Linux is a nice tool for running a near-native Linux
+experience on Windows, with your choice of distribution. The most likely
+distribution most will use is Ubuntu LTS, however there are some good options
+using AlmaLinux, SUSE, or Debian. These instructions will not describe *how* to
+install these, there are better guides online to get you there.
+
+Once you have your WSL instance running, you can install Git using the native
+package manager, perform the config, and clone the repo to start working with
+the repo and ansible.
+
+PowerShell: `wsl --update`
+
+Update your WSL distro with one of the following commands
+
+- Debian/Ubuntu: `sudo apt update && sudo apt full-upgrade`
+- RedHat/CentOS/Fedora: `sudo dnf update --refresh`
+
+Edit or create your /etc/wsl.conf in your WSL instance with the following
+content:
+
+```ini
+[boot]
+systemd=true
+```
+
+Restart your WSL
+
+PowerShell: `wsl --shutdown`
+
+Launch your WSL instance again, and then proceed with the native Linux
+instructions above.
+
+## Credentials
+
+You will need to have access to your Docker, Kubernetes, and Helm credentials
+to do much of this work. The easiest way to do this is inside of the container,
+see below.
+
+### Docker Credentials
 
 Visual Studio Code now correctly sets up Docker credentials when
 inside a devcontainer.
 
-## Helm Credentials
+### Kubernetes credentials
+
+In order for `kubectl` to work properly, you must have a working `~/.kube/config` file. You can
+generate one from Rancher. Note that these do not currently work in Codespaces. If you don't have
+one, you can do the following:
+
+1. Login to Rancher, open the cluster you want to use, and download the kubeconfig for
+   that cluster using the toolbar at the top.
+2. Repeat step (1) for any all other clusters you need.
+3. **Manually** merge all of the kubeconfig files into one. They all have the same format.
+4. Place the file into `~/.kube/config` on your host. If you're on Windows, this file should
+   go into your WSL environment.
+
+### Helm Credentials
 
 In order for Helm to be able to access your private docker registry inside of the container,
 you'll need to be sure you've done a `helm repo add` for any private registry on your host
@@ -56,12 +152,16 @@ helm repo add artifactory ${REGISTRY_URL} --username=${YOUR_OHIO_ID}
 ```
 
 Your password must be an API key or personal access token, not your Ohio password. Note
-that these do not currently work in Codespaces.
+that these do not currently work in Codespaces. Once you have this done inside of the
+container, you will need to copy this file out of the container onto your system.
 
-## Kubernetes credentials
+> NOTE: The below commands will erase any configured helm repositories on your host. If
+> you have some, you should run the above command on your host instead.
 
-In order for `kubectl` to work properly, you must have a working `~/.kube/config` file. You can
-generate one from Rancher. Note that these do not currently work in Codespaces.
+```bash
+mkdir -p "${HOST_HOME}"/.config/helm
+cp ~/.config/helm/repositories.yaml "${HOST_HOME}/.config/repositories.yaml
+```
 
 ## Usage as in GitHub Codespaces and Visual Studio Code
 
