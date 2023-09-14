@@ -35,6 +35,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         chroma \
         unzip \
         rsync \
+        nmap \
         less && \
     pip3 install yq && \
     sed -i '/'${LANG}'/s/^# //g' /etc/locale.gen && \
