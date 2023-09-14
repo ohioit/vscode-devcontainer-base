@@ -158,9 +158,18 @@ container, you will need to copy this file out of the container onto your system
 > NOTE: The below commands will erase any configured helm repositories on your host. If
 > you have some, you should run the above command on your host instead.
 
+#### Linux/Windows
+
 ```bash
-mkdir -p "${HOST_HOME}"/.config/helm
+test -d "${HOST_HOME}"/.config/helm || mkdir -p "${HOST_HOME}"/.config/helm
 cp ~/.config/helm/repositories.yaml "${HOST_HOME}/.config/repositories.yaml
+```
+
+#### Mac OS
+
+```bash
+test -d "${HOST_HOME}"/Library/Preferences/helm || mkdir -p "${HOST_HOME}"/Library/Preferences/helm
+cp ~/.config/helm/repositories.yaml "${HOST_HOME}/Library/Preferences/helm/repositories.yaml
 ```
 
 ## Usage as in GitHub Codespaces and Visual Studio Code
