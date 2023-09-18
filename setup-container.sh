@@ -47,7 +47,7 @@ else
     done
 
     if [[ -n "${HOST_HELM_REPOSITORIES_YAML}" ]]; then
-        sudo cp "${HOST_HOME}/.config/helm/repositories.yaml" "${HELM_REPOSITORIES_YAML}"
+        sudo cp "${HOST_HELM_REPOSITORIES_YAML}" "${HELM_REPOSITORIES_YAML}"
         sudo chown vscode:vscode "${HELM_REPOSITORIES_YAML}"
     else
         echo "Note: No user helm repositories were found in ${HOST_HOME}/.config/helm/repositories.yaml. You will not be able to use helm charts in Artifactory until this is setup." 1>&2
