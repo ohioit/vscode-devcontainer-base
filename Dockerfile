@@ -32,8 +32,8 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         software-properties-common \
         vim \
         wget \
-        chroma \
         unzip \
+        golang-chroma \
         rsync \
         nmap \
         less && \
