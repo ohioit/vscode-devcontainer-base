@@ -295,9 +295,18 @@ and paste it here."
     debug "Using project $rancher_project"
 
     current_server=""
+    current_context=""
     if [[ -f "$HOME/.rancher/cli2.json" ]]; then
         current_server=$(rancher_current_server)
         debug "Current server is $current_server"
+    fi
+
+    # Apparently Rancher will blow up the current context,
+    # including nuking any configured namespace. Since the kube
+    # context isn't our responsibility, we'll back it up and
+    # restore it when this is done.
+    if [[ -f "$HOME/.kube/config" ]]; then
+        cp "$HOME/.kube/config" "$HOME/.kube/config.rancherlogin"
     fi
 
     rancher login --token="${rancher_token}" --context="${rancher_project}" --name="${rancher_hostname}" "https://${rancher_hostname}"
@@ -305,6 +314,11 @@ and paste it here."
     if [[ -n "${current_context}" ]]; then
         debug "Switching back to previous server ${current_server}"
         rancher server switch "${current_server}"
+    fi
+
+    if [[ -f "$HOME/.kube/config" ]] && [[ -f "$HOME/.kube/config.rancherlogin" ]]; then
+        rm "$HOME/.kube/config"
+        mv "$HOME/.kube/config.rancherlogin" "$HOME/.kube/config"
     fi
 }
 
@@ -337,7 +351,7 @@ while getopts "udhIK" arg; do
     esac
 done
 
-if echo "$PATH" | grep -q "$HOME/.local/bin"; then
+if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
     echo "The directory $HOME/.local/bin is not in your PATH. Please add it to your shell profile."
     echo "For example, add the following line to your ~/.bashrc or ~/.zshrc:"
     echo
@@ -390,7 +404,9 @@ if should_install "rancher"; then
 fi
 
 debug "Checking for existing Rancher CLI configuration..."
+ALL_RANCHERS_ADDED="false"
 if [[ -f "$HOME/.rancher/cli2.json" ]]; then
+    ALL_RANCHERS_ADDED="true"
     debug "Validating existing configuration..."
     if ! [[ "$(yq -r '.Server.rancherDefault' < "$HOME/.rancher/cli2.json")" = "null" ]]; then
         warn "🚨 A 'rancherDefault' entry exists in your configuration and is known to cause problems. It's\
@@ -409,7 +425,6 @@ else
     rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
 fi
 
-ALL_RANCHERS_ADDED="false"
 while ! [[ "${ALL_RANCHERS_ADDED}" = "true" ]]; do
     info "The following Rancher servers have been configured:"
 
@@ -437,7 +452,10 @@ info "Validating all Rancher servers..."
 RANCHER_CURRENT_SERVER=$(rancher_current_server)
 for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
     rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
-    gum spin --show-error --title="Checking ${SERVER}..." rancher project list
+
+    if ! gum spin --show-error --title="Checking ${SERVER}..." rancher project list; then
+        rancher_login "${SERVER}"
+    fi
 done
 rancher server switch "${RANCHER_CURRENT_SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
 
@@ -516,3 +534,5 @@ else
     kubectl config set-context --current --namespace="${KUBE_DEFAULT_NAMESPACE}" >/dev/null
 fi
 
+# TODO: Once Rancher CLI supports logging in with Azure, replace the generated
+# kubeconfig token with a call to Rancher CLI.
