@@ -3,6 +3,7 @@ HAVE_GUM="$(which gum 2>/dev/null && 'true')"
 TEMP_DIR=$(mktemp -d)
 FORCE_UPDATE="${FORCE_UPDATE:-""}"
 ENABLE_DEBUG="${ENABLE_DEBUG:-""}"
+SKIP_KUBECONFIG="${SKIP_KUBECONFIG:-""}"
 ACCEPT_SUPPLY_CHAIN_SECURITY="${ACCEPT_SUPPLY_CHAIN_SECURITY:-""}"
 DEFAULT_RANCHER_HOSTNAME="rancher.oit.ohio.edu"
 
@@ -13,6 +14,23 @@ cleanup() {
 }
 
 trap cleanup EXIT INT
+
+# Determine the operating system and architecture
+LOCAL_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+LOCAL_ARCH=$(uname -m)
+case "$LOCAL_ARCH" in
+    x86_64)
+        LOCAL_ARCH=("amd64" "x86_64")
+        KUBECTL_ARCH="amd64"
+        ;;
+    *)
+        # shellcheck disable=SC2128
+        KUBECTL_ARCH="${LOCAL_ARCH}"
+        # shellcheck disable=SC2128
+        LOCAL_ARCH=("${LOCAL_ARCH}")
+        ;;
+esac
+
 
 log() {
     if [[ "${HAVE_GUM}" ]]; then
@@ -66,6 +84,15 @@ confirm() {
     fi
 }
 
+version_sort() {
+    # IMPORTANT: This function will only sort versions in the format of x.y.z
+    # with an optional lowercase `v` prefix. It will break on other strings.
+    #
+    # It should work fine whether or not the versions are separated by spaces
+    # or newlines but it will always return a list separated by newlines.
+    echo "${@}" | tr ' ' '\n' | sed 's/v//g' | awk -F. '{ printf("%d.%d.%d\n", $1, $2, $3) }' | sort -t. -k1,1n -k2,2n -k3,3n
+}
+
 call_rancher() {
     local token="$1"
     local url="$2"
@@ -98,33 +125,23 @@ download_latest_release() {
     local binary_name="$2"
     local format="$3"
 
-    local os
     local arch
-    local arches
     local latest_release_json
     local checksum_files=("checksums" "checksums.txt" "sha256sum" "sha256sum.txt")
     local checksum_url
     local binary_url
-    local download_result
 
     if [[ -n "${format}" ]]; then
         format=".$format"
     fi
 
-    # Determine the operating system and architecture
-    os=$(uname -s | tr '[:upper:]' '[:lower:]')
-    arch=$(uname -m)
-    case "$arch" in
-        x86_64) arches=("amd64" "x86_64") ;;
-        *) arches=("$arch") ;;
-    esac
-
     info "🔍 Searching for the latest release of $binary_name from $repo..."
-    # Fetch the latest release data from GitHub API
-    latest_release_json=$(curl -s "https://api.github.com/repos/$repo/releases/latest")
 
-    for arch in "${arches[@]}"; do
-        binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$os.*$arch(\.|$format)\"" | cut -d '"' -f 4)
+    latest_release_json=$(curl -s "https://api.github.com/repos/$repo/releases/latest")
+    latest_release=$(yq -r '.tag_name' <<< "$latest_release_json")
+
+    for arch in "${LOCAL_ARCH[@]}"; do
+        binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?(\.|$format)\"" | cut -d '"' -f 4)
 
         if [[ -n "$binary_url" ]]; then
             break
@@ -132,17 +149,21 @@ download_latest_release() {
     done
 
     if [[ -z "$binary_url" ]]; then
-        error "❌  Error: Could not find the binary $binary_name for $os/$arch in the latest release."
-        return 1
+        error "❌ Error: Could not find the binary $binary_name for $LOCAL_OS/$LOCAL_ARCH in the latest release."
+
+	debug "JSON from GitHub:"
+	debug "$(echo "${latest_release_json}" | yq -P -C -o json)"
+
+	return 1
     fi
 
     binary_download_name="$(basename "${binary_url}")"
 
     if [[ -n "${HAVE_GUM}" ]]; then
-        gum spin --show-error --show-output --title="Downloading $binary_name for $os/$arch..." -- \
+        gum spin --show-error --show-output --title="Downloading $binary_name for $LOCAL_OS/$arch..." -- \
             curl -sL --show-error "$binary_url" -o "${TEMP_DIR}/${binary_download_name}"
     else
-        info "🔗 Downloading $binary_name for $os/$arch..."
+        info "🔗 Downloading $binary_name for $LOCAL_OS/$arch..."
         curl -L --show-error "$binary_url" -o "${TEMP_DIR}/${binary_download_name}"
     fi
 
@@ -168,14 +189,15 @@ download_latest_release() {
             return 1
         fi
 
-        checksum_output=$(sha256sum -c "${TEMP_DIR}/${binary_name}_checksums" 2>&1)
-        grep -q "OK" <<< "$checksum_output"
+	    pushd "${TEMP_DIR}" 1>/dev/null || return 1
+        checksum_output=$(sha256sum --ignore-missing -c "${TEMP_DIR}/${binary_name}_checksums" 2>&1)
+        popd 1>/dev/null || return 1
+	    grep -q "OK" <<< "$checksum_output"
         check_result=$?
         rm "${TEMP_DIR}/${binary_name}_checksums"
 
         if ! [[ ${check_result} -eq 0 ]]; then
             error "❌ Checksum of ${binary_name} verification failed: ${checksum_output}"
-            cat "${TEMP_DIR}/${binary_name}_checksums"
             return 1
         fi
 
@@ -205,7 +227,7 @@ extract_download() {
             rm "${TEMP_DIR}/${binary_name}.$format"
             ;;
         *)
-            error "❌  Error: Unsupported format $format."
+            error "❌ Error: Unsupported format $format."
             return 1
             ;;
     esac
@@ -257,9 +279,12 @@ and paste it here."
 
     debug "Logged in user $rancher_user_id"
 
+    rancher_project=""
     if [[ -f "$HOME/.rancher/cli2.json" ]]; then
         rancher_project=$(yq -r '.Servers."'"${rancher_hostname}"'".project' < "$HOME/.rancher/cli2.json" | grep -v null)
-    else
+    fi
+
+    if [[ -z "$rancher_project" ]]; then
         rancher_project=$(call_rancher "$rancher_token" "https://${rancher_hostname}/v3/projects" | yq -r '.data[0].id')
         if [[ -z "$rancher_project" ]]; then
             error "❌ Error: Failed to find any projects in Rancher."
@@ -271,7 +296,7 @@ and paste it here."
 
     current_server=""
     if [[ -f "$HOME/.rancher/cli2.json" ]]; then
-        rancher_current_server
+        current_server=$(rancher_current_server)
         debug "Current server is $current_server"
     fi
 
@@ -283,7 +308,17 @@ and paste it here."
     fi
 }
 
-while getopts "udhI" arg; do
+install_kubectl() {
+    local kubectl_version="$1"
+
+    gum spin --show-error --show-output --title="Downloading kubectl ${kubectl_version} for $LOCAL_OS/$KUBECTL_ARCH..." -- \
+        curl -sL --show-error \
+        "https://dl.k8s.io/release/v${kubectl_version}/bin/${LOCAL_OS}/${KUBECTL_ARCH}/kubectl" -o "$HOME/.local/bin/kubectl" || exit 1
+    chmod 755 "$HOME/.local/bin/kubectl" || exit 1
+    info "🎉 Successfully installed kubectl ${kubectl_version}!"
+}
+
+while getopts "udhIK" arg; do
     case $arg in
         h) echo "Usage: $0 [options]"
            echo
@@ -291,17 +326,20 @@ while getopts "udhI" arg; do
            echo "  -d  Enable debug mode."
            echo "  -u  Force update of all tools."
            echo "  -I  Accept supply chain security risks without prompting."
+           echo "  -K  Skip kubeconfig generation."
+           echo "  -h  Show this help message."
            exit 0 ;;
         d) ENABLE_DEBUG="true" ;;
         u) FORCE_UPDATE="true" ;;
         I) ACCEPT_SUPPLY_CHAIN_SECURITY="true" ;;
-        *) error "❌  Error: Invalid option." && exit 1 ;;
+        K) SKIP_KUBECONFIG="true" ;;
+        *) error "❌  Error: Invalid option $arg." && exit 1 ;;
     esac
 done
 
 
 if [[ -z "${ACCEPT_SUPPLY_CHAIN_SECURITY}" ]]; then
-    if ! confirm "⚠️ This script will utilize a series of resources from \
+    if ! confirm "⚠️  This script will utilize a series of resources from \
 the internet. The integrity of these cannot be assured, are you sure you want to \
 continue?"; then
         info "😢  Quitting..."
@@ -328,6 +366,8 @@ if should_install "gum"; then
     HAVE_GUM="true"
 fi
 
+# This version of `yq` is written in Go and supports both
+# JSON and YAML. One tool, no interperters needed.
 if should_install "yq"; then
     INSANE_CHECKSUMS="true" download_latest_release "mikefarah/yq" "yq" || exit 1
     install --mode=0755 "${TEMP_DIR}/yq" "$HOME/.local/bin/yq" || exit 1
@@ -394,23 +434,77 @@ done
 rancher server switch "${RANCHER_CURRENT_SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
 
 info "🎉 All Rancher servers are configured and validated!"
-info "Generating kubeconfig..."
 
+if [[ -z "${SKIP_KUBECONFIG}" ]]; then
+    info "Generating kubeconfig..."
+fi
+
+KUBE_CONFIGS=()
+KUBE_CURRENT_CONTEXT=""
 if [[ -f "$HOME/.kube/config" ]]; then
     debug "Backing up existing kubeconfig..."
-    cp "$HOME/.kube/config" "${TEMP_DIR}/kubeconfig.yaml"
+    cp "$HOME/.kube/config" "$HOME/.kube/config.bak"
+
+    KUBE_CONFIGS+=("$HOME/.kube/config")
+    KUBE_CURRENT_CONTEXT=$(yq -r '.current-context' < "$HOME/.kube/config")
+else
+    mkdir -p "$HOME/.kube"
 fi
 
 RANCHER_CURRENT_SERVER=$(rancher_current_server)
+KUBE_CLUSTER_VERSIONS=()
 for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
     rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
     for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
-        rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml"
-        echo "===== ORIGINAL KUBECONFIG ===="
-        cat "${TEMP_DIR}/kubeconfig.yaml"
-        echo "===== NEW KUBECONFIG ===="
-        yq -n 'load("'"${TEMP_DIR}/kubeconfig.yaml"'") *+d load("'"${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml"'")'
+        if [[ -z "${SKIP_KUBECONFIG}" ]]; then
+            rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml"
+            KUBE_CONFIGS+=("${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml")
+        fi
+        KUBE_CLUSTER_VERSIONS+=("$(rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion')")
     done
 done
 rancher server switch "${RANCHER_CURRENT_SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
+readarray -t KUBE_CLUSTER_VERSIONS < <(printf '%s\n' "${KUBE_CLUSTER_VERSIONS[@]}" | sort -u)
+
+debug "Found the following Kubernetes versions: ${KUBE_CLUSTER_VERSIONS[*]}"
+
+KUBE_LATEST_VERSION=$(version_sort "${KUBE_CLUSTER_VERSIONS[@]}" | tail -n 1)
+KUBE_OLDEST_VERSION=$(version_sort "${KUBE_CLUSTER_VERSIONS[@]}" | head -n 1)
+
+debug "Latest Kubernetes version: ${KUBE_LATEST_VERSION}"
+debug "Oldest Kubernetes version: ${KUBE_OLDEST_VERSION}"
+
+#$(curl -L -s https://dl.k8s.io/release/stable.txt)
+
+if should_install "kubectl"; then
+   install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
+else
+    if [[ "$(which kubectl)" != "$HOME/.local/bin/kubectl" ]]; then
+        warn "🚨 kubectl is already installed but managed by a different tool. Proceeding with your existing kubectl."
+        rancher kubectl version >/dev/null
+    else
+        if rancher kubectl version 2>&1 | grep -qi "version difference"; then
+            info "🔍 Found a large version difference between kubectl and the clusters. Upgrading kubectl..."
+            install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
+        fi
+    fi
+fi
+
+OIFS=${IFS}; IFS=":"; KUBECONFIG="${KUBE_CONFIGS[*]}"; IFS=${OIFS}
+KUBECONFIG=${KUBECONFIG} kubectl config view --flatten > "$HOME/.kube/config"
+
+if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
+    kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
+else
+    echo "Select your default Kubernetes cluster:"
+    # shellcheck disable=SC2046
+    KUBE_DEFAULT_CLUSTER=$(gum choose --select-if-one --ordered \
+        $(kubectl config get-contexts -o name | grep -v "NAME" | sort | tr '\n' ' '))
+    kubectl config use-context "${KUBE_DEFAULT_CLUSTER}" >/dev/null
+    echo "Select your default namespace:"
+    # shellcheck disable=SC2046
+    KUBE_DEFAULT_NAMESPACE=$(gum choose --select-if-one --ordered \
+        $(kubectl get namespaces | grep -v "NAME" | awk '{ print $1 }' | sort | tr '\n' ' '))
+    kubectl config set-context --current --namespace="${KUBE_DEFAULT_NAMESPACE}" >/dev/null
+fi
 
