@@ -337,6 +337,16 @@ while getopts "udhIK" arg; do
     esac
 done
 
+if echo "$PATH" | grep -q "$HOME/.local/bin"; then
+    echo "The directory $HOME/.local/bin is not in your PATH. Please add it to your shell profile."
+    echo "For example, add the following line to your ~/.bashrc or ~/.zshrc:"
+    echo
+    echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+    echo
+    echo "Then reopen your terminal."
+
+    exit 1
+fi
 
 if [[ -z "${ACCEPT_SUPPLY_CHAIN_SECURITY}" ]]; then
     if ! confirm "⚠️  This script will utilize a series of resources from \
@@ -354,8 +364,6 @@ fi
 if ! [[ -d "$HOME/.local/bin" ]]; then
     mkdir -p "$HOME/.local/bin"
 fi
-
-PATH="$HOME/.local/bin:$PATH"
 
 if should_install "gum"; then
     download_latest_release "charmbracelet/gum" "gum" "tar.gz" || exit 1
