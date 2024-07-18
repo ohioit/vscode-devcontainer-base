@@ -4,8 +4,13 @@ TEMP_DIR=$(mktemp -d)
 FORCE_UPDATE="${FORCE_UPDATE:-""}"
 ENABLE_DEBUG="${ENABLE_DEBUG:-""}"
 SKIP_KUBECONFIG="${SKIP_KUBECONFIG:-""}"
+FORCE_ADD_MORE_RANCHERS="${FORCE_ADD_MORE_RANCHERS:-""}"
+FORCE_ADD_MORE_ARGOCD="${FORCE_ADD_MORE_ARGOCD:-""}"
+FORCE_ADD_MORE_GITHUB="${FORCE_ADD_MORE_GITHUB:-""}"
 ACCEPT_SUPPLY_CHAIN_SECURITY="${ACCEPT_SUPPLY_CHAIN_SECURITY:-""}"
 DEFAULT_RANCHER_HOSTNAME="rancher.oit.ohio.edu"
+USER_OHIOID=""
+ARTIFACTORY_TOKEN=""
 
 HTTP_DATA_METHODS=("POST" "PUT" "PATCH")
 
@@ -82,6 +87,20 @@ confirm() {
         echo
         [[ $REPLY =~ ^[Yy]$ ]]
     fi
+}
+
+get_ohioid() {
+    info "Please enter your OHIO ID for logging into services."
+    gum input --width=80 --placeholder="OHIO ID"
+}
+
+get_artifactory_token() {
+    info "🐳 It's time to login to Artifactory Go to https://artifatory.oit.ohio.edu
+ and login. Once you've logged in, click on your username in the top right and select:
+ → Profile → Generate an API Key (not an Identity Token) → Copy the API Key and paste it here."
+    gum input --width=80 --placeholder="Artifactory Token"
+
+    echo "${ARTIFACTORY_TOKEN}"
 }
 
 version_sort() {
@@ -332,7 +351,7 @@ install_kubectl() {
     info "🎉 Successfully installed kubectl ${kubectl_version}!"
 }
 
-while getopts "udhIK" arg; do
+while getopts "udhIRAGK" arg; do
     case $arg in
         h) echo "Usage: $0 [options]"
            echo
@@ -340,12 +359,18 @@ while getopts "udhIK" arg; do
            echo "  -d  Enable debug mode."
            echo "  -u  Force update of all tools."
            echo "  -I  Accept supply chain security risks without prompting."
+           echo "  -R  Prompt to add additional Rancher servers even if some are already configured."
+           echo "  -A  Prompt to add additional ArgoCD servers even if some area already configured."
+           echo "  -G  Prompt to add additional GitHub servers even if some are already configured."
            echo "  -K  Skip kubectl and kubeconfig."
            echo "  -h  Show this help message."
            exit 0 ;;
         d) ENABLE_DEBUG="true" ;;
         u) FORCE_UPDATE="true" ;;
         I) ACCEPT_SUPPLY_CHAIN_SECURITY="true" ;;
+        R) FORCE_ADD_MORE_RANCHERS="true" ;;
+        A) FORCE_ADD_MORE_ARGOCD="true" ;;
+        G) FORCE_ADD_MORE_GITHUB="true" ;;
         K) SKIP_KUBECONFIG="true" ;;
         *) error "❌  Error: Invalid option $arg." && exit 1 ;;
     esac
@@ -406,7 +431,10 @@ fi
 debug "Checking for existing Rancher CLI configuration..."
 ALL_RANCHERS_ADDED="false"
 if [[ -f "$HOME/.rancher/cli2.json" ]]; then
-    ALL_RANCHERS_ADDED="true"
+    if [[ -z "${FORCE_ADD_MORE_RANCHERS}" ]]; then
+        ALL_RANCHERS_ADDED="true"
+    fi
+
     debug "Validating existing configuration..."
     if ! [[ "$(yq -r '.Server.rancherDefault' < "$HOME/.rancher/cli2.json")" = "null" ]]; then
         warn "🚨 A 'rancherDefault' entry exists in your configuration and is known to cause problems. It's\
@@ -539,6 +567,18 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     # kubeconfig token with a call to Rancher CLI.
 fi
 
+# We do this whether or not we skip kubeconfig because we want to ensure
+# the kubeconfig is secure.
+if [[ -f "$HOME/.kube/config" ]]; then
+    chmod 600 "$HOME/.kube/config"
+fi
+
+if should_install "skaffold"; then
+    download_latest_release "GoogleContainerTools/skaffold" "skaffold" || exit 1
+    install --mode=0755 "${TEMP_DIR}/skaffold" "$HOME/.local/bin/skaffold" || exit 1
+    info "🎉 Successfully installed skaffold!"
+fi
+
 if should_install "gh"; then
     download_latest_release "cli/cli" "gh" "tar.gz" || exit 1
     extract_download "gh" "tar.gz" || exit 1
@@ -556,9 +596,47 @@ for GITHUB_SERVER in "${GITHUB_SERVERS[@]}"; do
         info "🔐 Authenticating to ${GITHUB_SERVER}..."
         gh auth login --hostname="${GITHUB_SERVER}" --web || exit 1
     fi
+done
+
+if [[ "${FORCE_ADD_MORE_GITHUB}" = "true" ]]; then
+    ALL_GITHUBS_ADDED="false"
+else
+    ALL_GITHUBS_ADDED="true"
+fi
+
+while [[ "${ALL_GITHUBS_ADDED}" = "false" ]]; do
+    info "The following Github servers have been configured:"
+
+    gum style \
+        --border-foreground=212 \
+        --border=double \
+        --align=center \
+        --width=50 \
+        --margin="1 2" \
+        --padding="2 4 " \
+        "$(yq '. | keys | .[]' "$HOME/.config/gh/hosts.yml")"
+
+    if ! gum confirm --default=No "Are there any additional Github servers you want to setup?"; then
+        ALL_GITHUBS_ADDED="true"
+        break
+    fi
+
+    GITHUB_SERVER=$(gum input --width=80 --placeholder="Github Server")
+
+    if gh auth status --hostname="${GITHUB_SERVER}" &>/dev/null; then
+        warn "🚨 ${GITHUB_SERVER} is already configured."
+        continue
+    fi
+
+    info "🔐 Authenticating to ${GITHUB_SERVER}..."
+    gh auth login --hostname="${GITHUB_SERVER}" --web || exit 1
 
     info "🎉 You're successfully authenticated to ${GITHUB_SERVER}!"
 done
+
+if ! git config --global --get init.defaultBranch &>/dev/null; then
+    git config --global init.defaultBranch main
+fi
 
 if ! git config --global --get user.name &>/dev/null; then
     git config --global user.name "$(gum input --width=80 --placeholder="Your name for git commits:")" || exit 1
@@ -574,5 +652,65 @@ if ! which git &>/dev/null; then
     warn "🚨 git is not installed. While this script does install the Github CLI, you still need to install\
  git itself. Please follow the appropriate steps for your operating system. On Windows, please install git\
  inside of WSL."
+fi
+
+HAVE_DOCKER="false"
+if which docker &>/dev/null; then
+    if docker ps &>/dev/null; then
+        HAVE_DOCKER="true"
+    else
+        warn "🚨 Docker is not running or is not accessible by your user. Please ensure 'docker ps' \
+ works before continuing. If you need help, please let us know."
+    fi
+else
+    warn "🚨 Docker is not installed. You'll need to install Docker yourself. Please \
+ follow the appropriate steps for your operating system. On Windows, please install Docker \
+ inside of WSL. You can follow instructions for the Linux distribution you're using in WSL. \
+ Note: In recent versions of WSL, this should just work. If you need help, please let us know."
+fi
+
+if [[ "${HAVE_DOCKER}" = "true" ]]; then
+    if ! docker login docker.artifactory.oit.ohio.edu &>/dev/null; then
+        [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+        [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+        if docker login -u "$(USER_OHIOID)" --password-stdin docker.artifactory.oit.ohio.edu <<< "$(ARTIFACTORY_TOKEN)"; then
+            info "🎉 Successfully logged into Artifactory's Docker Registry!"
+        else
+            exit 1
+        fi
+    else
+        info "🎉 You're already logged into Artifactory's Docker Registry!"
+    fi
+fi
+
+if should_install "argocd"; then
+    download_latest_release "argoproj/argo-cd" "argocd" || exit 1
+    install --mode=0755 "${TEMP_DIR}/argocd" "$HOME/.local/bin/argocd" || exit 1
+    info "🎉 Successfully installed ArgoCD!"
+fi
+
+TODO: Login to ArgoCD
+
+if should_install "helm"; then
+    gum spin --show-error --title="Downloading Helm Installer..." -- \
+        curl -Lo "${TEMP_DIR}/get-helm-3" https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+    chmod 755 "${TEMP_DIR}/get-helm-3"
+    HELM_INSTALL_DIR="$HOME/.local/bin" USE_SUDO="false" gum spin --show-error \
+        --title="Installing Helm..." "${TEMP_DIR}/get-helm-3" || exit 1
+    info "🎉 Successfully installed Helm!"
+fi
+
+if ! helm search repo artifactory --fail-on-no-result -o yaml &>/dev/null; then
+    info "Adding Artifactory helm repository..."
+    [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+    [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+    helm repo add artifactory https://artifactory.oit.ohio.edu/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+fi
+
+if ! helm search repo artifactory-push --fail-on-no-result -o yaml &>/dev/null; then
+    info "Adding Artifactory helm repository with push access..."
+    [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+    [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+    helm repo add artifactory-push https://artifactory.oit.ohio.edu/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
 fi
 
