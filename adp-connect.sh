@@ -152,7 +152,7 @@ download_latest_release() {
         error "❌ Error: Could not find the binary $binary_name for $LOCAL_OS/$LOCAL_ARCH in the latest release."
 
 	debug "JSON from GitHub:"
-	debug "$(echo "${latest_release_json}" | yq -P -C -o json)"
+	yq -P -C -o json <<< "${latest_release_json}"
 
 	return 1
     fi
@@ -189,10 +189,10 @@ download_latest_release() {
             return 1
         fi
 
-	    pushd "${TEMP_DIR}" 1>/dev/null || return 1
+        pushd "${TEMP_DIR}" 1>/dev/null || return 1
         checksum_output=$(sha256sum --ignore-missing -c "${TEMP_DIR}/${binary_name}_checksums" 2>&1)
         popd 1>/dev/null || return 1
-	    grep -q "OK" <<< "$checksum_output"
+        grep -q "OK" <<< "$checksum_output"
         check_result=$?
         rm "${TEMP_DIR}/${binary_name}_checksums"
 
@@ -340,7 +340,7 @@ while getopts "udhIK" arg; do
            echo "  -d  Enable debug mode."
            echo "  -u  Force update of all tools."
            echo "  -I  Accept supply chain security risks without prompting."
-           echo "  -K  Skip kubeconfig generation."
+           echo "  -K  Skip kubectl and kubeconfig."
            echo "  -h  Show this help message."
            exit 0 ;;
         d) ENABLE_DEBUG="true" ;;
@@ -463,76 +463,116 @@ info "🎉 All Rancher servers are configured and validated!"
 
 if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     info "Generating kubeconfig..."
-fi
 
-KUBE_CONFIGS=()
-KUBE_CURRENT_CONTEXT=""
-if [[ -f "$HOME/.kube/config" ]]; then
-    debug "Backing up existing kubeconfig..."
-    cp "$HOME/.kube/config" "$HOME/.kube/config.bak"
+    KUBE_CONFIGS=()
+    KUBE_CURRENT_CONTEXT=""
+    if [[ -f "$HOME/.kube/config" ]]; then
+        debug "Backing up existing kubeconfig..."
+        cp "$HOME/.kube/config" "$HOME/.kube/config.bak"
 
-    KUBE_CONFIGS+=("$HOME/.kube/config")
-    KUBE_CURRENT_CONTEXT=$(yq -r '.current-context' < "$HOME/.kube/config")
-else
-    mkdir -p "$HOME/.kube"
-fi
-
-RANCHER_CURRENT_SERVER=$(rancher_current_server)
-KUBE_CLUSTER_VERSIONS=()
-for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
-    rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
-    for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
-        if [[ -z "${SKIP_KUBECONFIG}" ]]; then
-            rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml"
-            KUBE_CONFIGS+=("${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml")
-        fi
-        KUBE_CLUSTER_VERSIONS+=("$(rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion')")
-    done
-done
-rancher server switch "${RANCHER_CURRENT_SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
-readarray -t KUBE_CLUSTER_VERSIONS < <(printf '%s\n' "${KUBE_CLUSTER_VERSIONS[@]}" | sort -u)
-
-debug "Found the following Kubernetes versions: ${KUBE_CLUSTER_VERSIONS[*]}"
-
-KUBE_LATEST_VERSION=$(version_sort "${KUBE_CLUSTER_VERSIONS[@]}" | tail -n 1)
-KUBE_OLDEST_VERSION=$(version_sort "${KUBE_CLUSTER_VERSIONS[@]}" | head -n 1)
-
-debug "Latest Kubernetes version: ${KUBE_LATEST_VERSION}"
-debug "Oldest Kubernetes version: ${KUBE_OLDEST_VERSION}"
-
-#$(curl -L -s https://dl.k8s.io/release/stable.txt)
-
-if should_install "kubectl"; then
-   install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
-else
-    if [[ "$(which kubectl)" != "$HOME/.local/bin/kubectl" ]]; then
-        warn "🚨 kubectl is already installed but managed by a different tool. Proceeding with your existing kubectl."
-        rancher kubectl version >/dev/null
+        KUBE_CONFIGS+=("$HOME/.kube/config")
+        KUBE_CURRENT_CONTEXT=$(yq -r '.current-context' < "$HOME/.kube/config")
     else
-        if rancher kubectl version 2>&1 | grep -qi "version difference"; then
-            info "🔍 Found a large version difference between kubectl and the clusters. Upgrading kubectl..."
-            install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
+        mkdir -p "$HOME/.kube"
+    fi
+
+    RANCHER_CURRENT_SERVER=$(rancher_current_server)
+    KUBE_CLUSTER_VERSIONS=()
+    for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
+        rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
+        for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
+            if [[ -z "${SKIP_KUBECONFIG}" ]]; then
+                rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml"
+                KUBE_CONFIGS+=("${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml")
+            fi
+            KUBE_CLUSTER_VERSIONS+=("$(rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion')")
+        done
+    done
+    rancher server switch "${RANCHER_CURRENT_SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
+    readarray -t KUBE_CLUSTER_VERSIONS < <(printf '%s\n' "${KUBE_CLUSTER_VERSIONS[@]}" | sort -u)
+
+    debug "Found the following Kubernetes versions: ${KUBE_CLUSTER_VERSIONS[*]}"
+
+    KUBE_LATEST_VERSION=$(version_sort "${KUBE_CLUSTER_VERSIONS[@]}" | tail -n 1)
+    KUBE_OLDEST_VERSION=$(version_sort "${KUBE_CLUSTER_VERSIONS[@]}" | head -n 1)
+
+    debug "Latest Kubernetes version: ${KUBE_LATEST_VERSION}"
+    debug "Oldest Kubernetes version: ${KUBE_OLDEST_VERSION}"
+
+    if should_install "kubectl"; then
+    install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
+    else
+        if [[ "$(which kubectl)" != "$HOME/.local/bin/kubectl" ]]; then
+            warn "🚨 kubectl is already installed but managed by a different tool. Proceeding with your existing kubectl."
+            rancher kubectl version >/dev/null
+        else
+            if rancher kubectl version 2>&1 | grep -qi "version difference"; then
+                info "🔍 Found a large version difference between kubectl and the clusters. Upgrading kubectl..."
+                install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
+            fi
         fi
     fi
+
+    OIFS=${IFS}; IFS=":"; KUBECONFIG="${KUBE_CONFIGS[*]}"; IFS=${OIFS}
+    KUBECONFIG=${KUBECONFIG} kubectl config view --flatten > "$HOME/.kube/config"
+
+    if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
+        kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
+    else
+        echo "Select your default Kubernetes cluster:"
+        # shellcheck disable=SC2046
+        KUBE_DEFAULT_CLUSTER=$(gum choose --select-if-one --ordered \
+            $(kubectl config get-contexts -o name | grep -v "NAME" | sort | tr '\n' ' '))
+        kubectl config use-context "${KUBE_DEFAULT_CLUSTER}" >/dev/null
+        echo "Select your default namespace:"
+        # shellcheck disable=SC2046
+        KUBE_DEFAULT_NAMESPACE=$(gum choose --select-if-one --ordered \
+            $(kubectl get namespaces | grep -v "NAME" | awk '{ print $1 }' | sort | tr '\n' ' '))
+        kubectl config set-context --current --namespace="${KUBE_DEFAULT_NAMESPACE}" >/dev/null
+    fi
+
+    info "🎉 You now have access to $(yq '.contexts | length' ~/.kube/config) Kubernetes contexts! \
+    Your default context is $(kubectl config current-context).\
+    You'll be using the namespace $(kubectl config view --minify --output 'jsonpath={..namespace}') by default."
+
+    # TODO: Once Rancher CLI supports logging in with Azure, replace the generated
+    # kubeconfig token with a call to Rancher CLI.
 fi
 
-OIFS=${IFS}; IFS=":"; KUBECONFIG="${KUBE_CONFIGS[*]}"; IFS=${OIFS}
-KUBECONFIG=${KUBECONFIG} kubectl config view --flatten > "$HOME/.kube/config"
-
-if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
-    kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
-else
-    echo "Select your default Kubernetes cluster:"
-    # shellcheck disable=SC2046
-    KUBE_DEFAULT_CLUSTER=$(gum choose --select-if-one --ordered \
-        $(kubectl config get-contexts -o name | grep -v "NAME" | sort | tr '\n' ' '))
-    kubectl config use-context "${KUBE_DEFAULT_CLUSTER}" >/dev/null
-    echo "Select your default namespace:"
-    # shellcheck disable=SC2046
-    KUBE_DEFAULT_NAMESPACE=$(gum choose --select-if-one --ordered \
-        $(kubectl get namespaces | grep -v "NAME" | awk '{ print $1 }' | sort | tr '\n' ' '))
-    kubectl config set-context --current --namespace="${KUBE_DEFAULT_NAMESPACE}" >/dev/null
+if should_install "gh"; then
+    download_latest_release "cli/cli" "gh" "tar.gz" || exit 1
+    extract_download "gh" "tar.gz" || exit 1
+    mv "${TEMP_DIR}"/gh_* "${TEMP_DIR}/gh"
+    install --mode=0755 "${TEMP_DIR}/gh/bin/gh" "$HOME/.local/bin/gh" || exit 1
+    info "🎉 Successfully installed gh!"
 fi
 
-# TODO: Once Rancher CLI supports logging in with Azure, replace the generated
-# kubeconfig token with a call to Rancher CLI.
+GITHUB_SERVERS=("github.ohio.edu" "github.com")
+
+for GITHUB_SERVER in "${GITHUB_SERVERS[@]}"; do
+    if gh auth status --hostname="${GITHUB_SERVER}" &>/dev/null; then
+        debug "Already authenticated to ${GITHUB_SERVER}"
+    else
+        info "🔐 Authenticating to ${GITHUB_SERVER}..."
+        gh auth login --hostname="${GITHUB_SERVER}" --web || exit 1
+    fi
+
+    info "🎉 You're successfully authenticated to ${GITHUB_SERVER}!"
+done
+
+if ! git config --global --get user.name &>/dev/null; then
+    git config --global user.name "$(gum input --width=80 --placeholder="Your name for git commits:")" || exit 1
+fi
+
+if ! git config --global --get user.email &>/dev/null; then
+    git config --global user.email "$(gum input --width=80 --placeholder="Your OHIO email for git commits:")" || exit 1
+fi
+
+info "You'll be committing as $(git config --global --get user.name) <$(git config --global --get user.email)>."
+
+if ! which git &>/dev/null; then
+    warn "🚨 git is not installed. While this script does install the Github CLI, you still need to install\
+ git itself. Please follow the appropriate steps for your operating system. On Windows, please install git\
+ inside of WSL."
+fi
+
