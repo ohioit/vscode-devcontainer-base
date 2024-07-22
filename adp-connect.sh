@@ -567,6 +567,23 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     OIFS=${IFS}; IFS=":"; KUBECONFIG="${KUBE_CONFIGS[*]}"; IFS=${OIFS}
     KUBECONFIG=${KUBECONFIG} kubectl config view --flatten > "$HOME/.kube/config"
 
+    if [[ -f "$HOME/.kube/config.bak" ]]; then
+        for CONTEXT in $(yq eval -o json -I=0 '.contexts[]' "$HOME/.kube/config.bak"); do
+            NAMESPACE=$(yq -r '.context.namespace' <<< "${CONTEXT}")
+            NAME=$(yq -r '.name' <<< "${CONTEXT}")
+
+            if [[ -z "$(yq -r '.contexts[] | select(.name == "'"${NAME}"'")' "$HOME/.kube/config" 2>/dev/null)" ]]; then
+                continue
+            fi
+
+            if [[ "${NAMESPACE}" = "null" ]]; then
+                kubectl config set-context "${NAME}" --namespace ""
+            else
+                kubectl config set-context "${NAME}" --namespace "${NAMESPACE}"
+            fi
+        done
+    fi
+
     if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
         kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
     else
@@ -575,11 +592,16 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
         KUBE_DEFAULT_CLUSTER=$(gum choose --select-if-one --ordered \
             $(kubectl config get-contexts -o name | grep -v "NAME" | sort | tr '\n' ' '))
         kubectl config use-context "${KUBE_DEFAULT_CLUSTER}" >/dev/null
-        echo "Select your default namespace:"
+    fi
+
+    CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}')
+
+    if [[ -z "${CURRENT_NAMESPACE}" ]]; then
+        info "Select your default namespace:"
         # shellcheck disable=SC2046
-        KUBE_DEFAULT_NAMESPACE=$(gum choose --select-if-one --ordered \
-            $(kubectl get namespaces | grep -v "NAME" | awk '{ print $1 }' | sort | tr '\n' ' '))
-        kubectl config set-context --current --namespace="${KUBE_DEFAULT_NAMESPACE}" >/dev/null
+        DEFAULT_NAMESPACE=$(gum choose --select-if-one --ordered \
+            $(kubectl get namespaces -o name | grep -v "NAME" | sort | tr '\n' ' '))
+        kubectl config set-context --current --namespace="${DEFAULT_NAMESPACE}" >/dev/null
     fi
 
     info "🎉 You now have access to $(yq '.contexts | length' ~/.kube/config) Kubernetes contexts!"
