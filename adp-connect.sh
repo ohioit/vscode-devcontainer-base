@@ -9,6 +9,9 @@ FORCE_ADD_MORE_ARGOCD="${FORCE_ADD_MORE_ARGOCD:-""}"
 FORCE_ADD_MORE_GITHUB="${FORCE_ADD_MORE_GITHUB:-""}"
 ACCEPT_SUPPLY_CHAIN_SECURITY="${ACCEPT_SUPPLY_CHAIN_SECURITY:-""}"
 DEFAULT_RANCHER_HOSTNAME="rancher.oit.ohio.edu"
+DEFAULT_ARTIFACTORY_HOSTNAME="artifactory.oit.ohio.edu"
+DEFAULT_ARGOCD_HOSTNAME="argo.ops.kube.ohio.edu"
+DEFAULT_DEFAULT_GITHUB_SERVERS=("github.ohio.edu" "github.com")
 USER_OHIOID=""
 ARTIFACTORY_TOKEN=""
 
@@ -241,10 +244,6 @@ extract_download() {
             tar -C "$TEMP_DIR" -xf "${TEMP_DIR}/${binary_name}.$format"
             rm "${TEMP_DIR}/${binary_name}.$format"
             ;;
-        zip)
-            unzip -q "${TEMP_DIR}/${binary_name}.$format" -d "$TEMP_DIR"
-            rm "${TEMP_DIR}/${binary_name}.$format"
-            ;;
         *)
             error "❌ Error: Unsupported format $format."
             return 1
@@ -351,6 +350,28 @@ install_kubectl() {
     info "🎉 Successfully installed kubectl ${kubectl_version}!"
 }
 
+ALL_BINARIES_AVAILABLE="true"
+for BINARY in curl tar awk sed grep; do
+    if ! which "${BINARY}" &>/dev/null; then
+        error "❌ Error: ${BINARY} is required but not installed. Please contact ADP for assistance and let us know what operating system you're using."
+        ALL_BINARIES_AVAILABLE="false"
+    fi
+done
+
+if [[ "${ALL_BINARIES_AVAILABLE}" = "false" ]]; then
+    exit 1
+fi
+
+if ! grep --help | grep -q 'extended-regexp'; then
+    error "❌ Error: Your version of grep does not support extended regular expressions. PPlease contact ADP for assistance and let us know what operating system you're using."
+    exit 1
+fi
+
+if ! bash -c 'help readarray' &>/dev/null; then
+    error "❌ Error: Your version of bash does not support readarray. Please contact ADP for assistance and let us know what operating system you're using."
+    exit 1
+fi
+
 while getopts "udhIRAGK" arg; do
     case $arg in
         h) echo "Usage: $0 [options]"
@@ -391,7 +412,7 @@ if [[ -z "${ACCEPT_SUPPLY_CHAIN_SECURITY}" ]]; then
     if ! confirm "⚠️  This script will utilize a series of resources from \
 the internet. The integrity of these cannot be assured, are you sure you want to \
 continue?"; then
-        info "😢  Quitting..."
+        info "😢 Quitting..."
         exit 1
     fi
 else
@@ -499,10 +520,12 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
         cp "$HOME/.kube/config" "$HOME/.kube/config.bak"
 
         KUBE_CONFIGS+=("$HOME/.kube/config")
-        KUBE_CURRENT_CONTEXT=$(yq -r '.current-context' < "$HOME/.kube/config")
+        KUBE_CURRENT_CONTEXT=$(yq -r '.current-context' "$HOME/.kube/config")
     else
         mkdir -p "$HOME/.kube"
     fi
+
+    debug "Current kubeconfig context: ${KUBE_CURRENT_CONTEXT}"
 
     RANCHER_CURRENT_SERVER=$(rancher_current_server)
     KUBE_CLUSTER_VERSIONS=()
@@ -528,7 +551,7 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     debug "Oldest Kubernetes version: ${KUBE_OLDEST_VERSION}"
 
     if should_install "kubectl"; then
-    install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
+        install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
     else
         if [[ "$(which kubectl)" != "$HOME/.local/bin/kubectl" ]]; then
             warn "🚨 kubectl is already installed but managed by a different tool. Proceeding with your existing kubectl."
@@ -559,9 +582,9 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
         kubectl config set-context --current --namespace="${KUBE_DEFAULT_NAMESPACE}" >/dev/null
     fi
 
-    info "🎉 You now have access to $(yq '.contexts | length' ~/.kube/config) Kubernetes contexts! \
-    Your default context is $(kubectl config current-context).\
-    You'll be using the namespace $(kubectl config view --minify --output 'jsonpath={..namespace}') by default."
+    info "🎉 You now have access to $(yq '.contexts | length' ~/.kube/config) Kubernetes contexts!"
+    info "Your default context is $(kubectl config current-context)."
+    info "You'll be using the namespace $(kubectl config view --minify --output 'jsonpath={..namespace}') by default."
 
     # TODO: Once Rancher CLI supports logging in with Azure, replace the generated
     # kubeconfig token with a call to Rancher CLI.
@@ -587,11 +610,9 @@ if should_install "gh"; then
     info "🎉 Successfully installed gh!"
 fi
 
-GITHUB_SERVERS=("github.ohio.edu" "github.com")
-
-for GITHUB_SERVER in "${GITHUB_SERVERS[@]}"; do
+for GITHUB_SERVER in "${DEFAULT_GITHUB_SERVERS[@]}"; do
     if gh auth status --hostname="${GITHUB_SERVER}" &>/dev/null; then
-        debug "Already authenticated to ${GITHUB_SERVER}"
+        info "🎉 You're already authenticated to ${GITHUB_SERVER}!"
     else
         info "🔐 Authenticating to ${GITHUB_SERVER}..."
         gh auth login --hostname="${GITHUB_SERVER}" --web || exit 1
@@ -670,10 +691,10 @@ else
 fi
 
 if [[ "${HAVE_DOCKER}" = "true" ]]; then
-    if ! docker login docker.artifactory.oit.ohio.edu &>/dev/null; then
+    if ! docker login docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" &>/dev/null; then
         [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
         [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-        if docker login -u "$(USER_OHIOID)" --password-stdin docker.artifactory.oit.ohio.edu <<< "$(ARTIFACTORY_TOKEN)"; then
+        if docker login -u "$(USER_OHIOID)" --password-stdin docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "$(ARTIFACTORY_TOKEN)"; then
             info "🎉 Successfully logged into Artifactory's Docker Registry!"
         else
             exit 1
@@ -689,7 +710,59 @@ if should_install "argocd"; then
     info "🎉 Successfully installed ArgoCD!"
 fi
 
-TODO: Login to ArgoCD
+if ! argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${DEFAULT_ARGOCD_HOSTNAME}"; then
+    info "Logging into ArgoCD at ${DEFAULT_ARGOCD_HOSTNAME}..."
+    argocd login "${DEFAULT_ARGOCD_HOSTNAME}" --grpc-web --sso --skip-test-tls || exit 1
+fi
+
+ARGOCD_CURRENT_CONTEXT="$(argocd context | grep '\*' | awk '{ print $2 }')"
+for ARGOCD_SERVER in $(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }'); do
+    argocd context "${ARGOCD_SERVER}" 1>/dev/null || exit 1
+    if ! argocd version &>/dev/null; then
+        info "Need to relogin to ArgoCD at ${ARGOCD_SERVER}..."
+        argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
+    else
+        info "🎉 You're successfully authenticated to ArgoCD at $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+    fi
+done
+
+if [[ "${FORCE_ADD_MORE_ARGOCD}" = "true" ]]; then
+    ALL_ARGOCDS_ADDED="false"
+else
+    ALL_ARGOCDS_ADDED="true"
+fi
+
+while [[ "${ALL_ARGOCDS_ADDED}" = "false" ]]; do
+    info "The following ArgoCD servers have been configured:"
+
+    gum style \
+        --border-foreground=212 \
+        --border=double \
+        --align=center \
+        --width=50 \
+        --margin="1 2" \
+        --padding="2 4 " \
+        "$(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }')"
+
+    if ! gum confirm --default=No "Are there any additional ArgoCD servers you want to setup?"; then
+        ALL_ARGOCDS_ADDED="true"
+        break
+    fi
+
+    ARGOCD_SERVER=$(gum input --width=80 --placeholder="ArgoCD Server")
+
+    if argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${ARGOCD_SERVER}"; then
+        warn "🚨 ${ARGOCD_SERVER} is already configured."
+        continue
+    fi
+
+    info "Logging into ArgoCD at ${ARGOCD_SERVER}..."
+    argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
+
+    info "🎉 You're successfully authenticated to $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+done
+
+argocd context "${ARGOCD_CURRENT_CONTEXT}" 1>/dev/null || exit 1
 
 if should_install "helm"; then
     gum spin --show-error --title="Downloading Helm Installer..." -- \
@@ -704,13 +777,16 @@ if ! helm search repo artifactory --fail-on-no-result -o yaml &>/dev/null; then
     info "Adding Artifactory helm repository..."
     [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
     [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-    helm repo add artifactory https://artifactory.oit.ohio.edu/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+    helm repo add artifactory https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+else
+    info "🎉 You're already authenticated to the Artifactory helm repository!"
 fi
 
 if ! helm search repo artifactory-push --fail-on-no-result -o yaml &>/dev/null; then
     info "Adding Artifactory helm repository with push access..."
     [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
     [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-    helm repo add artifactory-push https://artifactory.oit.ohio.edu/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+    helm repo add artifactory-push https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+else
+    info "🎉 You're already authenticated to the Artifactory helm repository with push access!"
 fi
-
