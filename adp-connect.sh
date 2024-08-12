@@ -11,7 +11,11 @@ ACCEPT_SUPPLY_CHAIN_SECURITY="${ACCEPT_SUPPLY_CHAIN_SECURITY:-""}"
 DEFAULT_RANCHER_HOSTNAME="rancher.oit.ohio.edu"
 DEFAULT_ARTIFACTORY_HOSTNAME="artifactory.oit.ohio.edu"
 DEFAULT_ARGOCD_HOSTNAME="argo.ops.kube.ohio.edu"
-DEFAULT_DEFAULT_GITHUB_SERVERS=("github.ohio.edu" "github.com")
+DEFAULT_GITHUB_SERVERS=("github.ohio.edu" "github.com")
+KUBE_CLIENT_CONFIG_SECRET="${KUBE_CLIENT_CONFIG_SECRET:-dev-client-saved-config}"
+KUBE_CLIENT_CONFIG_CONTEXT="${KUBE_CLIENT_CONFIG_CONTEXT:-ais-devtest}"
+STORE_CLIENT_CONFIG="${STORE_CLIENT_CONFIG:-true}"
+HAVE_GPG="false"
 USER_OHIOID=""
 ARTIFACTORY_TOKEN=""
 
@@ -372,19 +376,22 @@ if ! bash -c 'help readarray' &>/dev/null; then
     exit 1
 fi
 
-while getopts "udhIRAGK" arg; do
+while getopts "udhIRAGKSc:s:" arg; do
     case $arg in
         h) echo "Usage: $0 [options]"
            echo
            echo "Options:"
-           echo "  -d  Enable debug mode."
-           echo "  -u  Force update of all tools."
-           echo "  -I  Accept supply chain security risks without prompting."
-           echo "  -R  Prompt to add additional Rancher servers even if some are already configured."
-           echo "  -A  Prompt to add additional ArgoCD servers even if some area already configured."
-           echo "  -G  Prompt to add additional GitHub servers even if some are already configured."
-           echo "  -K  Skip kubectl and kubeconfig."
-           echo "  -h  Show this help message."
+           echo "  -d           Enable debug mode."
+           echo "  -u           Force update of all tools."
+           echo "  -I           Accept supply chain security risks without prompting."
+           echo "  -R           Prompt to add additional Rancher servers even if some are already configured."
+           echo "  -A           Prompt to add additional ArgoCD servers even if some area already configured."
+           echo "  -G           Prompt to add additional GitHub servers even if some are already configured."
+           echo "  -K           Skip kubectl and kubeconfig."
+           echo "  -S           Don't store this client configuration in the Kubernetes cluster."
+           echo "  -c <context> The Kubernetes context to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_CONTEXT"
+           echo "  -s <secret>  The Kubernetes secret to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_SECRET"
+           echo "  -h           Show this help message."
            exit 0 ;;
         d) ENABLE_DEBUG="true" ;;
         u) FORCE_UPDATE="true" ;;
@@ -393,6 +400,9 @@ while getopts "udhIRAGK" arg; do
         A) FORCE_ADD_MORE_ARGOCD="true" ;;
         G) FORCE_ADD_MORE_GITHUB="true" ;;
         K) SKIP_KUBECONFIG="true" ;;
+        S) STORE_CLIENT_CONFIG="false" ;;
+        c) KUBE_CLIENT_CONFIG_CONTEXT="$OPTARG" ;;
+        s) KUBE_CLIENT_CONFIG_SECRET="$OPTARG" ;;
         *) error "❌  Error: Invalid option $arg." && exit 1 ;;
     esac
 done
@@ -447,6 +457,13 @@ if should_install "rancher"; then
     extract_download "rancher" "tar.gz" || exit 1
     install --mode=0755 "${TEMP_DIR}/rancher"*/"rancher" "$HOME/.local/bin/rancher" || exit 1
     info "🎉 Successfully installed rancher CLI!"
+fi
+
+if [[ "${STORE_CLIENT_CONFIG}" = "true" ]]; then
+    if ! which gpg &>/dev/null; then
+        warn "🚨 gpg is not installed. If you want to store/recall your credentials across machines, you'll need to have gpg installed on each." 1>&2
+        STORE_CLIENT_CONFIG="false"
+    fi
 fi
 
 debug "Checking for existing Rancher CLI configuration..."
@@ -577,9 +594,9 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
             fi
 
             if [[ "${NAMESPACE}" = "null" ]]; then
-                kubectl config set-context "${NAME}" --namespace ""
+                kubectl config set-context "${NAME}" --namespace "" 1>/dev/null
             else
-                kubectl config set-context "${NAME}" --namespace "${NAMESPACE}"
+                kubectl config set-context "${NAME}" --namespace "${NAMESPACE}" 1>/dev/null
             fi
         done
     fi
@@ -600,7 +617,7 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
         info "Select your default namespace:"
         # shellcheck disable=SC2046
         DEFAULT_NAMESPACE=$(gum choose --select-if-one --ordered \
-            $(kubectl get namespaces -o name | grep -v "NAME" | sort | tr '\n' ' '))
+            $(kubectl get namespaces -o name | grep -v "NAME" | awk -F/ '{ print $2 }' | sort | tr '\n' ' '))
         kubectl config set-context --current --namespace="${DEFAULT_NAMESPACE}" >/dev/null
     fi
 

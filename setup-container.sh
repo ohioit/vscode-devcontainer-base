@@ -56,6 +56,11 @@ else
     for WORKSPACE in /workspaces/*; do
         if [[ -e "${WORKSPACE}/helm/Chart.yaml" ]]; then
             for DEPENDENCY in $(helm dep list "${WORKSPACE}/helm" | grep -v NAME | awk '{ print $3 }'); do
+                if [[ "${DEPENDENCY}" = "oci://"* ]]; then
+                    echo "Skipping OCI dependency ${DEPENDENCY}"
+                    continue
+                fi
+
                 if ! [[ -e "${HELM_REPOSITORIES_YAML}" ]] || ! (yq -r '.repositories[].url' "${HELM_REPOSITORIES_YAML}" | grep -q '^'"${DEPENDENCY}"'$'); then
                     DEPENDENCY_NAME=$(echo "${DEPENDENCY}" | sed -r 's/https?:\/\/(.*)/\1/' | sed -r 's/[\,\/]/-/g')
                     echo "Adding Helm repository for ${DEPENDENCY_NAME} from current project."
