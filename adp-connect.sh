@@ -16,6 +16,8 @@ KUBE_CLIENT_CONFIG_SECRET="${KUBE_CLIENT_CONFIG_SECRET:-dev-client-saved-config}
 KUBE_CLIENT_CONFIG_CONTEXT="${KUBE_CLIENT_CONFIG_CONTEXT:-ais-devtest}"
 STORE_CLIENT_CONFIG="${STORE_CLIENT_CONFIG:-true}"
 HAVE_GPG="false"
+SEALED_SECRETS_CONTROLLER_NAME="sealed-secrets"
+SEALED_SECRETS_CONTROLLER_NAMESPACE="sealed-secrets"
 USER_OHIOID=""
 ARTIFACTORY_TOKEN=""
 
@@ -635,10 +637,26 @@ if [[ -f "$HOME/.kube/config" ]]; then
     chmod 600 "$HOME/.kube/config"
 fi
 
+if should_install "kubeseal"; then
+    download_latest_release "bitnami-labs/sealed-secrets" "kubeseal" "tar.gz" || exit 1
+    extract_download "kubeseal" "tar.gz" || exit 1
+    install --mode=0755 "${TEMP_DIR}/kubeseal" "$HOME/.local/bin/kubeseal" || exit 1
+    info "🎉 Successfully installed kubeseal!"
+fi
+
+info "Fetching Sealed Secrets sealing certificates..."
+for CONTEXT in $(yq eval -o json -I=0 '.contexts[]' "$HOME/.kube/config"); do
+    NAME=$(yq -r '.name' <<< "${CONTEXT}")
+
+    if [[ ! "${NAME}" =~ -fqdn$ ]]; then
+        kubeseal --context="${NAME}" --request-timeout=2s --fetch-cert --controller-name="${SEALED_SECRETS_CONTROLLER_NAME}" --controller-namespace="${SEALED_SECRETS_CONTROLLER_NAMESPACE}" > "$HOME/.kube/$NAME.pem"
+    fi
+done
+
 if should_install "k9s"; then
     download_latest_release "derailed/k9s" "k9s" "tar.gz" || exit 1
     extract_download "k9s" "tar.gz" || exit 1
-    install --mode=0755 --mode=0755 "${TEMP_DIR}/k9s" "$HOME/.local/bin/k9s" || exit 1
+    install --mode=0755 "${TEMP_DIR}/k9s" "$HOME/.local/bin/k9s" || exit 1
     info "🎉 Successfully installed k9s!"
 fi
 
