@@ -786,59 +786,63 @@ if should_install "argocd"; then
     info "🎉 Successfully installed ArgoCD!"
 fi
 
-if ! argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${DEFAULT_ARGOCD_HOSTNAME}"; then
-    info "Logging into ArgoCD at ${DEFAULT_ARGOCD_HOSTNAME}..."
-    argocd login "${DEFAULT_ARGOCD_HOSTNAME}" --grpc-web --sso --skip-test-tls || exit 1
-fi
+if which xdg-open &>/dev/null || which open &>/dev/null; then
+    if ! argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${DEFAULT_ARGOCD_HOSTNAME}"; then
+        info "Logging into ArgoCD at ${DEFAULT_ARGOCD_HOSTNAME}..."
+        argocd login "${DEFAULT_ARGOCD_HOSTNAME}" --grpc-web --sso --skip-test-tls || exit 1
+    fi
 
-ARGOCD_CURRENT_CONTEXT="$(argocd context | grep '\*' | awk '{ print $2 }')"
-for ARGOCD_SERVER in $(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }'); do
-    argocd context "${ARGOCD_SERVER}" 1>/dev/null || exit 1
-    if ! argocd version &>/dev/null; then
-        info "Need to relogin to ArgoCD at ${ARGOCD_SERVER}..."
-        argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
+    ARGOCD_CURRENT_CONTEXT="$(argocd context | grep '\*' | awk '{ print $2 }')"
+    for ARGOCD_SERVER in $(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }'); do
+        argocd context "${ARGOCD_SERVER}" 1>/dev/null || exit 1
+        if ! argocd version &>/dev/null; then
+            info "Need to relogin to ArgoCD at ${ARGOCD_SERVER}..."
+            argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
+        else
+            info "🎉 You're successfully authenticated to ArgoCD at $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+        fi
+    done
+
+    if [[ "${FORCE_ADD_MORE_ARGOCD}" = "true" ]]; then
+        ALL_ARGOCDS_ADDED="false"
     else
-        info "🎉 You're successfully authenticated to ArgoCD at $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
-    fi
-done
-
-if [[ "${FORCE_ADD_MORE_ARGOCD}" = "true" ]]; then
-    ALL_ARGOCDS_ADDED="false"
-else
-    ALL_ARGOCDS_ADDED="true"
-fi
-
-while [[ "${ALL_ARGOCDS_ADDED}" = "false" ]]; do
-    info "The following ArgoCD servers have been configured:"
-
-    gum style \
-        --border-foreground=212 \
-        --border=double \
-        --align=center \
-        --width=50 \
-        --margin="1 2" \
-        --padding="2 4 " \
-        "$(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }')"
-
-    if ! gum confirm --default=No "Are there any additional ArgoCD servers you want to setup?"; then
         ALL_ARGOCDS_ADDED="true"
-        break
     fi
 
-    ARGOCD_SERVER=$(gum input --width=80 --placeholder="ArgoCD Server")
+    while [[ "${ALL_ARGOCDS_ADDED}" = "false" ]]; do
+        info "The following ArgoCD servers have been configured:"
 
-    if argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${ARGOCD_SERVER}"; then
-        warn "🚨 ${ARGOCD_SERVER} is already configured."
-        continue
-    fi
+        gum style \
+            --border-foreground=212 \
+            --border=double \
+            --align=center \
+            --width=50 \
+            --margin="1 2" \
+            --padding="2 4 " \
+            "$(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }')"
 
-    info "Logging into ArgoCD at ${ARGOCD_SERVER}..."
-    argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
+        if ! gum confirm --default=No "Are there any additional ArgoCD servers you want to setup?"; then
+            ALL_ARGOCDS_ADDED="true"
+            break
+        fi
 
-    info "🎉 You're successfully authenticated to $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
-done
+        ARGOCD_SERVER=$(gum input --width=80 --placeholder="ArgoCD Server")
 
-argocd context "${ARGOCD_CURRENT_CONTEXT}" 1>/dev/null || exit 1
+        if argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${ARGOCD_SERVER}"; then
+            warn "🚨 ${ARGOCD_SERVER} is already configured."
+            continue
+        fi
+
+        info "Logging into ArgoCD at ${ARGOCD_SERVER}..."
+        argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
+
+        info "🎉 You're successfully authenticated to $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+    done
+
+    argocd context "${ARGOCD_CURRENT_CONTEXT}" 1>/dev/null || exit 1
+else
+    warn "🚨 Your system is unable to open a browser from a cli (no xdg-open or open tools are available). Skipping ArgoCD configuration."
+fi
 
 if should_install "helm"; then
     gum spin --show-error --title="Downloading Helm Installer..." -- \
