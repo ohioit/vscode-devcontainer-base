@@ -765,10 +765,15 @@ if [[ "${HAVE_DOCKER}" = "true" ]]; then
     if ! docker login docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" &>/dev/null; then
         [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
         [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-        if docker login -u "$(USER_OHIOID)" --password-stdin docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "$(ARTIFACTORY_TOKEN)"; then
-            info "🎉 Successfully logged into Artifactory's Docker Registry!"
+
+        if [[ -z "${ARTIFACTORY_TOKEN}" ]] || [[ -z "${USER_OHIOID}" ]]; then
+            warn "Skipping Artifactory login for Docker and Helm. You'll need to configure these manually or rerun this script."
         else
-            exit 1
+            if docker login -u "$(USER_OHIOID)" --password-stdin docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "$(ARTIFACTORY_TOKEN)"; then
+                info "🎉 Successfully logged into Artifactory's Docker Registry!"
+            else
+                exit 1
+            fi
         fi
     else
         info "🎉 You're already logged into Artifactory's Docker Registry!"
@@ -845,19 +850,23 @@ if should_install "helm"; then
 fi
 
 if ! helm search repo artifactory --fail-on-no-result -o yaml &>/dev/null; then
-    info "Adding Artifactory helm repository..."
-    [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-    [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-    helm repo add artifactory https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+    if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
+        info "Adding Artifactory helm repository..."
+        [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+        [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+        helm repo add artifactory https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+    fi
 else
     info "🎉 You're already authenticated to the Artifactory helm repository!"
 fi
 
 if ! helm search repo artifactory-push --fail-on-no-result -o yaml &>/dev/null; then
-    info "Adding Artifactory helm repository with push access..."
-    [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-    [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-    helm repo add artifactory-push https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+    if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
+        info "Adding Artifactory helm repository with push access..."
+        [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+        [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+        helm repo add artifactory-push https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+    fi
 else
     info "🎉 You're already authenticated to the Artifactory helm repository with push access!"
 fi
