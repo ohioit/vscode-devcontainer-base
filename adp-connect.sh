@@ -762,7 +762,7 @@ else
 fi
 
 if [[ "${HAVE_DOCKER}" = "true" ]]; then
-    if ! docker login docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" &>/dev/null; then
+    if ! docker login docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "" &>/dev/null; then
         [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
         [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
 
