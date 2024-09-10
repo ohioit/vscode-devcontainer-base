@@ -166,7 +166,7 @@ download_latest_release() {
     info "🔍 Searching for the latest release of $binary_name from $repo..."
 
     latest_release_json=$(curl -s "https://api.github.com/repos/$repo/releases/latest")
-    latest_release=$(yq -r '.tag_name' <<< "$latest_release_json")
+    latest_release=$(echo "${latest_release_json}" | grep -e '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
 
     for arch in "${LOCAL_ARCH[@]}"; do
         binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?(\.|$format)\"" | cut -d '"' -f 4)
@@ -179,10 +179,17 @@ download_latest_release() {
     if [[ -z "$binary_url" ]]; then
         error "❌ Error: Could not find the binary $binary_name for $LOCAL_OS/$LOCAL_ARCH in the latest release."
 
-	debug "JSON from GitHub:"
-	yq -P -C -o json <<< "${latest_release_json}"
+        if [[ "${ENABLE_DEBUG}" = "true" ]]; then
+            if which yq &>/dev/null; then
+                debug "JSON from GitHub:"
+                yq -P -C -o json <<< "${latest_release_json}"
+            else
+                debug "JSON from GitHub:"
+                echo "${latest_release_json}"
+            fi
+        fi
 
-	return 1
+	    return 1
     fi
 
     binary_download_name="$(basename "${binary_url}")"
