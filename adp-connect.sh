@@ -537,7 +537,7 @@ rancher server switch "${RANCHER_CURRENT_SERVER}" 2> >(grep -v "Saving config" >
 info "🎉 All Rancher servers are configured and validated!"
 
 if [[ -z "${SKIP_KUBECONFIG}" ]]; then
-    info "Generating kubeconfig..."
+    info "Generating/updating kubeconfig..."
 
     KUBE_CONFIGS=()
     KUBE_CURRENT_CONTEXT=""
@@ -613,20 +613,31 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
         kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
     else
-        echo "Select your default Kubernetes cluster:"
-        # shellcheck disable=SC2046
-        KUBE_DEFAULT_CLUSTER=$(gum choose --select-if-one --ordered \
-            $(kubectl config get-contexts -o name | grep -v "NAME" | sort | tr '\n' ' '))
-        kubectl config use-context "${KUBE_DEFAULT_CLUSTER}" >/dev/null
+        if [[ "$(rancher context ls | wc -l)" -gt 1 ]]; then
+            info "Select your default Kubernetes context:"
+        fi
+        echo "Select your default Kubernetes cluster and project:"
+        rancher context switch
+
+        KUBE_CURRENT_CONTEXT=$(rancher context current | awk '{ print $1 }' | awk -F: '{ print $2 }')
+
+        kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
     fi
 
-    CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}')
+    CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'$(kubectl config current-context)'")].context.namespace}')
+
+    if [[ -n "${CURRENT_NAMESPACE}" ]]; then
+        if ! (rancher namespaces -q | grep -q "${CURRENT_NAMESPACE}"); then
+            warn "Your current namespace ${CURRENT_NAMESPACE} does not exist in project $(rancher context current | sed 's/.*Project://')".
+            CURRENT_NAMESPACE=""
+        fi
+    fi
 
     if [[ -z "${CURRENT_NAMESPACE}" ]]; then
         info "Select your default namespace:"
         # shellcheck disable=SC2046
         DEFAULT_NAMESPACE=$(gum choose --select-if-one --ordered \
-            $(kubectl get namespaces -o name | grep -v "NAME" | awk -F/ '{ print $2 }' | sort | tr '\n' ' '))
+            $(rancher namespaces -q | sort | tr '\n' ' '))
         kubectl config set-context --current --namespace="${DEFAULT_NAMESPACE}" >/dev/null
     fi
 

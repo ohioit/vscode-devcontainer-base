@@ -13,7 +13,9 @@
                 "timonwong.shellcheck",
                 "redhat.vscode-yaml",
                 "eamodio.gitlens",
-                "ms-azuretools.vscode-docker"
+                "ms-azuretools.vscode-docker",
+                "GitHub.copilot",
+                "GitHub.copilot-chat"
             ]
         }
     },
