@@ -112,6 +112,26 @@ get_artifactory_token() {
     echo "${ARTIFACTORY_TOKEN}"
 }
 
+compare_versions() {
+  # Copilot wrote this one and I'm too lazy to fully verify or grok it.
+  # Remove leading 'v' if present
+  ver1="${1#v}"
+  ver2="${2#v}"
+
+  IFS='.' read -r -a ver1 <<< "$ver1"
+  IFS='.' read -r -a ver2 <<< "$ver2"
+
+  for ((i=0; i<${#ver1[@]}; i++)); do
+    if [[ ${ver1[i]} -gt ${ver2[i]:-0} ]]; then
+      return 1
+    elif [[ ${ver1[i]} -lt ${ver2[i]:-0} ]]; then
+      return 2
+    fi
+  done
+
+  return 0
+}
+
 version_sort() {
     # IMPORTANT: This function will only sort versions in the format of x.y.z
     # with an optional lowercase `v` prefix. It will break on other strings.
@@ -461,7 +481,19 @@ if should_install "yq"; then
     info "🎉 Successfully installed yq!"
 fi
 
-if should_install "rancher"; then
+should_install "rancher"
+INSTALL_RANCHER=$?
+NEEDED_RANCHER_VERSION=2.9.0
+
+if [[ "${INSTALL_RANCHER}" = "1" ]]; then
+    compare_versions "$(rancher --version | awk '{ print $3 }')" "${NEEDED_RANCHER_VERSION}"
+    if [[ "$?" = "2" ]]; then
+        warn "🚨 Your version of Rancher CLI is less than ${NEEDED_RANCHER_VERSION}. Forcing an upgrade."
+        INSTALL_RANCHER=0
+    fi
+fi
+
+if [[ "${INSTALL_RANCHER}" = "0" ]]; then
     download_latest_release "rancher/cli" "rancher" "tar.gz" || exit 1
     extract_download "rancher" "tar.gz" || exit 1
     install --mode=0755 "${TEMP_DIR}/rancher"*/"rancher" "$HOME/.local/bin/rancher" || exit 1
@@ -613,7 +645,7 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
         kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
     else
-        if [[ "$(rancher context ls | wc -l)" -gt 1 ]]; then
+        if [[ "$(rancher project ls -q | wc -l)" -gt 1 ]]; then
             info "Select your default Kubernetes context:"
         fi
         echo "Select your default Kubernetes cluster and project:"
