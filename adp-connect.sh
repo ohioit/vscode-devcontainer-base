@@ -315,20 +315,24 @@ rancher_login() {
         exit 1
     fi
 
-    info "It's time to login to Rancher. Please go to https://${rancher_hostname}/dashboard/account and login. \
-Once you've logged in, generate a new API Key. The scope you choose will limit the clusters you can interact with. \
-Use \"no scope\" if you want to interact with all clusters. Once you've generated the key, copy the bearer token \
-and paste it here."
+    # Remove protocol if present
+    rancher_hostname=$(echo "$rancher_hostname" | sed -e 's|^[a-zA-Z]*://||')
 
-    rancher_token=$(gum input --width=80 --placeholder="Rancher Bearer Token")
+    info "It's time to login to Rancher, follow the prompts to login. NOTE: It may take a few seconds after\
+ completing the login process for the CLI to notice and continue."
+    rancher_token_credential=$(rancher token --server "https://${rancher_hostname}" --user="$(whoami)" --auth-provider=azureADProvider)
 
-    rancher_user_id=$(call_rancher "$rancher_token" "https://${rancher_hostname}/v3/users?me=true" | yq -r '.data[0].id')
-    if [[ -z "$rancher_user_id" ]]; then
-        error "❌ Error: Failed to get user ID from Rancher."
+    if [[ "$?" -ne 0 ]]; then
+        error "❌ Error: Failed to login to Rancher."
         exit 1
     fi
 
-    debug "Logged in user $rancher_user_id"
+    rancher_token=$(echo "${rancher_token_credential}" | yq -r '.status.token')
+
+    if [[ "$?" -ne 0 ]] || [[ -z "$rancher_token" ]]; then
+        error "❌ Error: Failed to get parse token response from Rancher."
+        exit 1
+    fi
 
     rancher_project=""
     if [[ -f "$HOME/.rancher/cli2.json" ]]; then
@@ -360,7 +364,7 @@ and paste it here."
         cp "$HOME/.kube/config" "$HOME/.kube/config.rancherlogin"
     fi
 
-    rancher login --token="${rancher_token}" --context="${rancher_project}" --name="${rancher_hostname}" "https://${rancher_hostname}"
+    rancher login --token="${rancher_token}" --context="${rancher_project}" --name="https://${rancher_hostname}" "https://${rancher_hostname}"
 
     if [[ -n "${current_context}" ]]; then
         debug "Switching back to previous server ${current_server}"
@@ -371,6 +375,11 @@ and paste it here."
         rm "$HOME/.kube/config"
         mv "$HOME/.kube/config.rancherlogin" "$HOME/.kube/config"
     fi
+
+    debug "Injecting credentials into Rancher CLI configuration..."
+    for CLUSTER in $(rancher cluster ls --format '{{.Cluster.Name}}_{{.Cluster.ID}}'); do
+        yq -i ".Servers.\"https://${rancher_hostname}\".kubeCredentials[\"${CLUSTER}\"] = ${rancher_token_credential}" "$HOME/.rancher/cli2.json"
+    done
 }
 
 install_kubectl() {
@@ -591,8 +600,32 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
         rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
         for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
             if [[ -z "${SKIP_KUBECONFIG}" ]]; then
-                rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml"
-                KUBE_CONFIGS+=("${TEMP_DIR}/${SERVER}-${CLUSTER}.yaml")
+                TEMP_KUBE_CONFIG=$(echo "${SERVER}-${CLUSTER}" | base64)
+                rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
+
+                yq -r '.users[] | .name' "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml" | while read -r KUBECONFIG_USER; do
+                    debug "Configuring kubectl to use Rancher CLI authentication for ${KUBECONFIG_USER}..."
+
+                    yq -i '.users[] |= (
+                        select(.name == "'"${KUBECONFIG_USER}"'") |
+                            .user |= (
+                                del(.token) |
+                                    .exec = {
+                                        "apiVersion": "client.authentication.k8s.io/v1beta1",
+                                        "command": "rancher",
+                                        "args": [
+                                            "token",
+                                            "--server='"${SERVER}"'",
+                                            "--cluster='"${CLUSTER}"'",
+                                            "--user='"${KUBECONFIG_USER}"'",
+                                            "--auth-provider=azureADProvider"
+                                        ]
+                                    }
+                            )
+                    )' "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
+                done
+
+                KUBE_CONFIGS+=("${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml")
             fi
             KUBE_CLUSTER_VERSIONS+=("$(rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion')")
         done
@@ -676,9 +709,6 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     info "🎉 You now have access to $(yq '.contexts | length' ~/.kube/config) Kubernetes contexts!"
     info "Your default context is $(kubectl config current-context)."
     info "You'll be using the namespace $(kubectl config view --minify --output 'jsonpath={..namespace}') by default."
-
-    # TODO: Once Rancher CLI supports logging in with Azure, replace the generated
-    # kubeconfig token with a call to Rancher CLI.
 fi
 
 # We do this whether or not we skip kubeconfig because we want to ensure
