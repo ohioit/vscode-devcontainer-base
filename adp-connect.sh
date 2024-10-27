@@ -14,8 +14,6 @@ DEFAULT_ARGOCD_HOSTNAME="argo.ops.kube.ohio.edu"
 DEFAULT_GITHUB_SERVERS=("github.ohio.edu" "github.com")
 KUBE_CLIENT_CONFIG_SECRET="${KUBE_CLIENT_CONFIG_SECRET:-dev-client-saved-config}"
 KUBE_CLIENT_CONFIG_CONTEXT="${KUBE_CLIENT_CONFIG_CONTEXT:-ais-devtest}"
-STORE_CLIENT_CONFIG="${STORE_CLIENT_CONFIG:-true}"
-HAVE_GPG="false"
 SEALED_SECRETS_CONTROLLER_NAME="sealed-secrets"
 SEALED_SECRETS_CONTROLLER_NAMESPACE="sealed-secrets"
 SETUP_INTERNAL_SERVICES="false"
@@ -425,7 +423,6 @@ while getopts "udhIRAGKSac:s:" arg; do
            echo "  -A           Prompt to add additional ArgoCD servers even if some area already configured."
            echo "  -G           Prompt to add additional GitHub servers even if some are already configured."
            echo "  -K           Skip kubectl and kubeconfig."
-           echo "  -S           Don't store this client configuration in the Kubernetes cluster."
            echo "  -a           Login to all ADP services, not just Rancher and Kubernetes."
            echo "  -c <context> The Kubernetes context to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_CONTEXT"
            echo "  -s <secret>  The Kubernetes secret to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_SECRET"
@@ -438,7 +435,6 @@ while getopts "udhIRAGKSac:s:" arg; do
         A) FORCE_ADD_MORE_ARGOCD="true" ;;
         G) FORCE_ADD_MORE_GITHUB="true" ;;
         K) SKIP_KUBECONFIG="true" ;;
-        S) STORE_CLIENT_CONFIG="false" ;;
         a) SETUP_INTERNAL_SERVICES="true" ;;
         c) KUBE_CLIENT_CONFIG_CONTEXT="$OPTARG" ;;
         s) KUBE_CLIENT_CONFIG_SECRET="$OPTARG" ;;
@@ -508,13 +504,6 @@ if [[ "${INSTALL_RANCHER}" = "0" ]]; then
     extract_download "rancher" "tar.gz" || exit 1
     install --mode=0755 "${TEMP_DIR}/rancher"*/"rancher" "$HOME/.local/bin/rancher" || exit 1
     info "🎉 Successfully installed rancher CLI!"
-fi
-
-if [[ "${STORE_CLIENT_CONFIG}" = "true" ]]; then
-    if ! which gpg &>/dev/null; then
-        warn "🚨 gpg is not installed. If you want to store/recall your credentials across machines, you'll need to have gpg installed on each." 1>&2
-        STORE_CLIENT_CONFIG="false"
-    fi
 fi
 
 debug "Checking for existing Rancher CLI configuration..."
