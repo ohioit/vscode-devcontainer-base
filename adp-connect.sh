@@ -26,6 +26,9 @@ HTTP_DATA_METHODS=("POST" "PUT" "PATCH")
 
 cleanup() {
     rm -rf "$TEMP_DIR"
+    rm -rf "${HOME}/.kube/config.incomplete"
+
+    exit
 }
 
 trap cleanup EXIT INT
@@ -576,7 +579,7 @@ rancher server switch "${RANCHER_CURRENT_SERVER}" 2> >(grep -v "Saving config" >
 info "🎉 All Rancher servers are configured and validated!"
 
 if [[ -z "${SKIP_KUBECONFIG}" ]]; then
-    info "Generating/updating kubeconfig..."
+    info "Generating/updating kubeconfig (this will take some time)..."
 
     KUBE_CONFIGS=()
     KUBE_CURRENT_CONTEXT=""
@@ -595,16 +598,18 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     RANCHER_CURRENT_SERVER=$(rancher_current_server)
     KUBE_CLUSTER_VERSIONS=()
     for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
+        debug "Switching to Rancher server ${SERVER}..."
         rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
         for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
             if [[ -z "${SKIP_KUBECONFIG}" ]]; then
                 TEMP_KUBE_CONFIG=$(echo "${SERVER}-${CLUSTER}" | base64)
-                rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
+                gum spin --show-error --title="Fetching kubeconfig for cluster ${CLUSTER}..." -- rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
                 KUBE_CONFIGS+=("${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml")
             fi
             KUBE_CLUSTER_VERSIONS+=("$(rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion')")
         done
     done
+    debug "Switching back to original Rancher server..."
     rancher server switch "${RANCHER_CURRENT_SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
     readarray -t KUBE_CLUSTER_VERSIONS < <(printf '%s\n' "${KUBE_CLUSTER_VERSIONS[@]}" | sort -u)
 
@@ -631,7 +636,7 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     fi
 
     OIFS=${IFS}; IFS=":"; KUBECONFIG="${KUBE_CONFIGS[*]}"; IFS=${OIFS}
-    KUBECONFIG=${KUBECONFIG} kubectl config view --flatten > "$HOME/.kube/config"
+    KUBECONFIG=${KUBECONFIG} kubectl config view --flatten > "$HOME/.kube/config.incomplete"
 
     if [[ -f "$HOME/.kube/config.bak" ]]; then
         for CONTEXT in $(yq eval -o json -I=0 '.contexts[]' "$HOME/.kube/config.bak"); do
@@ -643,15 +648,15 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
             fi
 
             if [[ "${NAMESPACE}" = "null" ]]; then
-                kubectl config set-context "${NAME}" --namespace "" 1>/dev/null
+                KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config set-context "${NAME}" --namespace "" 1>/dev/null
             else
-                kubectl config set-context "${NAME}" --namespace "${NAMESPACE}" 1>/dev/null
+                KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config set-context "${NAME}" --namespace "${NAMESPACE}" 1>/dev/null
             fi
         done
     fi
 
     if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
-        kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
+        KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
     else
         if [[ "$(rancher project ls -q | wc -l)" -gt 1 ]]; then
             info "Select your default Kubernetes context:"
@@ -661,7 +666,7 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
 
         KUBE_CURRENT_CONTEXT=$(rancher context current | awk '{ print $1 }' | awk -F: '{ print $2 }')
 
-        kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
+        KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
     fi
 
     CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'$(kubectl config current-context)'")].context.namespace}')
@@ -678,8 +683,10 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
         # shellcheck disable=SC2046
         DEFAULT_NAMESPACE=$(gum choose --select-if-one --ordered \
             $(rancher namespaces -q | sort | tr '\n' ' '))
-        kubectl config set-context --current --namespace="${DEFAULT_NAMESPACE}" >/dev/null
+        KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config set-context --current --namespace="${DEFAULT_NAMESPACE}" >/dev/null
     fi
+
+    mv "$HOME/.kube/config.incomplete" "$HOME/.kube/config"
 
     info "🎉 You now have access to $(yq '.contexts | length' ~/.kube/config) Kubernetes contexts!"
     info "Your default context is $(kubectl config current-context)."
