@@ -18,6 +18,7 @@ STORE_CLIENT_CONFIG="${STORE_CLIENT_CONFIG:-true}"
 HAVE_GPG="false"
 SEALED_SECRETS_CONTROLLER_NAME="sealed-secrets"
 SEALED_SECRETS_CONTROLLER_NAMESPACE="sealed-secrets"
+SETUP_INTERNAL_SERVICES="false"
 USER_OHIOID=""
 ARTIFACTORY_TOKEN=""
 
@@ -375,11 +376,6 @@ rancher_login() {
         rm "$HOME/.kube/config"
         mv "$HOME/.kube/config.rancherlogin" "$HOME/.kube/config"
     fi
-
-    debug "Injecting credentials into Rancher CLI configuration..."
-    for CLUSTER in $(rancher cluster ls --format '{{.Cluster.Name}}_{{.Cluster.ID}}'); do
-        yq -i ".Servers.\"https://${rancher_hostname}\".kubeCredentials[\"${CLUSTER}\"] = ${rancher_token_credential}" "$HOME/.rancher/cli2.json"
-    done
 }
 
 install_kubectl() {
@@ -414,7 +410,7 @@ if ! bash -c 'help readarray' &>/dev/null; then
     exit 1
 fi
 
-while getopts "udhIRAGKSc:s:" arg; do
+while getopts "udhIRAGKSac:s:" arg; do
     case $arg in
         h) echo "Usage: $0 [options]"
            echo
@@ -427,6 +423,7 @@ while getopts "udhIRAGKSc:s:" arg; do
            echo "  -G           Prompt to add additional GitHub servers even if some are already configured."
            echo "  -K           Skip kubectl and kubeconfig."
            echo "  -S           Don't store this client configuration in the Kubernetes cluster."
+           echo "  -a           Login to all ADP services, not just Rancher and Kubernetes."
            echo "  -c <context> The Kubernetes context to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_CONTEXT"
            echo "  -s <secret>  The Kubernetes secret to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_SECRET"
            echo "  -h           Show this help message."
@@ -439,6 +436,7 @@ while getopts "udhIRAGKSc:s:" arg; do
         G) FORCE_ADD_MORE_GITHUB="true" ;;
         K) SKIP_KUBECONFIG="true" ;;
         S) STORE_CLIENT_CONFIG="false" ;;
+        a) SETUP_INTERNAL_SERVICES="true" ;;
         c) KUBE_CLIENT_CONFIG_CONTEXT="$OPTARG" ;;
         s) KUBE_CLIENT_CONFIG_SECRET="$OPTARG" ;;
         *) error "❌  Error: Invalid option $arg." && exit 1 ;;
@@ -602,29 +600,6 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
             if [[ -z "${SKIP_KUBECONFIG}" ]]; then
                 TEMP_KUBE_CONFIG=$(echo "${SERVER}-${CLUSTER}" | base64)
                 rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
-
-                yq -r '.users[] | .name' "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml" | while read -r KUBECONFIG_USER; do
-                    debug "Configuring kubectl to use Rancher CLI authentication for ${KUBECONFIG_USER}..."
-
-                    yq -i '.users[] |= (
-                        select(.name == "'"${KUBECONFIG_USER}"'") |
-                            .user |= (
-                                del(.token) |
-                                    .exec = {
-                                        "apiVersion": "client.authentication.k8s.io/v1beta1",
-                                        "command": "rancher",
-                                        "args": [
-                                            "token",
-                                            "--server='"${SERVER}"'",
-                                            "--cluster='"${CLUSTER}"'",
-                                            "--user='"${KUBECONFIG_USER}"'",
-                                            "--auth-provider=azureADProvider"
-                                        ]
-                                    }
-                            )
-                    )' "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
-                done
-
                 KUBE_CONFIGS+=("${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml")
             fi
             KUBE_CLUSTER_VERSIONS+=("$(rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion')")
@@ -725,13 +700,42 @@ if should_install "kubeseal"; then
 fi
 
 info "Fetching Sealed Secrets sealing certificates..."
+KUBESEAL_FAILED="false"
 for CONTEXT in $(yq eval -o json -I=0 '.contexts[]' "$HOME/.kube/config"); do
     NAME=$(yq -r '.name' <<< "${CONTEXT}")
 
     if [[ ! "${NAME}" =~ -fqdn$ ]]; then
-        kubeseal --context="${NAME}" --request-timeout=2s --fetch-cert --controller-name="${SEALED_SECRETS_CONTROLLER_NAME}" --controller-namespace="${SEALED_SECRETS_CONTROLLER_NAMESPACE}" > "$HOME/.kube/$NAME.pem"
+        if ! kubeseal --context="${NAME}" --request-timeout=2s --fetch-cert \
+                      --controller-name="${SEALED_SECRETS_CONTROLLER_NAME}" \
+                      --controller-namespace="${SEALED_SECRETS_CONTROLLER_NAMESPACE}" > "$HOME/.kube/$NAME.pem" 2>>/tmp/kubeseal.err; then
+            warn "❌ Warning: Failed to fetch Sealed Secrets certificate for ${NAME}."
+
+            KUBESEAL_FAILED="true"
+        fi
     fi
 done
+
+if [[ "${KUBESEAL_FAILED}" = "true" ]]; then
+    warn "🚨 You won't be able to seal secrets for these clusters locally until this is resolved. It's likely a network issue. \
+Please make sure you're on the VPN or VDI and can otherwise access the clusters with kubectl. If this keeps failing, \
+run this script again with the -d flag for more output."
+
+    if [[ "${ENABLE_DEBUG}" ]]; then
+        debug "kubeseal error output:"
+        cat /tmp/kubeseal.err
+    fi
+
+    rm /tmp/kubeseal.err
+fi
+
+if should_install "helm"; then
+    gum spin --show-error --title="Downloading Helm Installer..." -- \
+        curl -Lo "${TEMP_DIR}/get-helm-3" https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+    chmod 755 "${TEMP_DIR}/get-helm-3"
+    HELM_INSTALL_DIR="$HOME/.local/bin" USE_SUDO="false" gum spin --show-error \
+        --title="Installing Helm..." "${TEMP_DIR}/get-helm-3" || exit 1
+    info "🎉 Successfully installed Helm!"
+fi
 
 if should_install "k9s"; then
     download_latest_release "derailed/k9s" "k9s" "tar.gz" || exit 1
@@ -819,131 +823,124 @@ if ! which git &>/dev/null; then
  inside of WSL."
 fi
 
-HAVE_DOCKER="false"
-if which docker &>/dev/null; then
-    if docker ps &>/dev/null; then
-        HAVE_DOCKER="true"
-    else
-        warn "🚨 Docker is not running or is not accessible by your user. Please ensure 'docker ps' \
- works before continuing. If you need help, please let us know."
-    fi
-else
-    warn "🚨 Docker is not installed. You'll need to install Docker yourself. Please \
- follow the appropriate steps for your operating system. On Windows, please install Docker \
- inside of WSL. You can follow instructions for the Linux distribution you're using in WSL. \
- Note: In recent versions of WSL, this should just work. If you need help, please let us know."
-fi
-
-if [[ "${HAVE_DOCKER}" = "true" ]]; then
-    if ! docker login docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "" &>/dev/null; then
-        [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-        [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-
-        if [[ -z "${ARTIFACTORY_TOKEN}" ]] || [[ -z "${USER_OHIOID}" ]]; then
-            warn "Skipping Artifactory login for Docker and Helm. You'll need to configure these manually or rerun this script."
+if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
+    HAVE_DOCKER="false"
+    if which docker &>/dev/null; then
+        if docker ps &>/dev/null; then
+            HAVE_DOCKER="true"
         else
-            if docker login -u "$(USER_OHIOID)" --password-stdin docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "$(ARTIFACTORY_TOKEN)"; then
-                info "🎉 Successfully logged into Artifactory's Docker Registry!"
+            warn "🚨 Docker is not running or is not accessible by your user. Please ensure 'docker ps' \
+    works before continuing. If you need help, please let us know."
+        fi
+    else
+        warn "🚨 Docker is not installed. You'll need to install Docker yourself. Please \
+    follow the appropriate steps for your operating system. On Windows, please install Docker \
+    inside of WSL. You can follow instructions for the Linux distribution you're using in WSL. \
+    Note: In recent versions of WSL, this should just work. If you need help, please let us know."
+    fi
+
+    if [[ "${HAVE_DOCKER}" = "true" ]]; then
+        if ! docker login docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "" &>/dev/null; then
+            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+            [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+
+            if [[ -z "${ARTIFACTORY_TOKEN}" ]] || [[ -z "${USER_OHIOID}" ]]; then
+                warn "Skipping Artifactory login for Docker and Helm. You'll need to configure these manually or rerun this script."
             else
-                exit 1
+                if docker login -u "$(USER_OHIOID)" --password-stdin docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "$(ARTIFACTORY_TOKEN)"; then
+                    info "🎉 Successfully logged into Artifactory's Docker Registry!"
+                else
+                    exit 1
+                fi
             fi
-        fi
-    else
-        info "🎉 You're already logged into Artifactory's Docker Registry!"
-    fi
-fi
-
-if should_install "argocd"; then
-    download_latest_release "argoproj/argo-cd" "argocd" || exit 1
-    install --mode=0755 "${TEMP_DIR}/argocd" "$HOME/.local/bin/argocd" || exit 1
-    info "🎉 Successfully installed ArgoCD!"
-fi
-
-if which xdg-open &>/dev/null || which open &>/dev/null; then
-    if ! argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${DEFAULT_ARGOCD_HOSTNAME}"; then
-        info "Logging into ArgoCD at ${DEFAULT_ARGOCD_HOSTNAME}..."
-        argocd login "${DEFAULT_ARGOCD_HOSTNAME}" --grpc-web --sso --skip-test-tls || exit 1
-    fi
-
-    ARGOCD_CURRENT_CONTEXT="$(argocd context | grep '\*' | awk '{ print $2 }')"
-    for ARGOCD_SERVER in $(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }'); do
-        argocd context "${ARGOCD_SERVER}" 1>/dev/null || exit 1
-        if ! argocd version &>/dev/null; then
-            info "Need to relogin to ArgoCD at ${ARGOCD_SERVER}..."
-            argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
         else
-            info "🎉 You're successfully authenticated to ArgoCD at $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+            info "🎉 You're already logged into Artifactory's Docker Registry!"
         fi
-    done
-
-    if [[ "${FORCE_ADD_MORE_ARGOCD}" = "true" ]]; then
-        ALL_ARGOCDS_ADDED="false"
-    else
-        ALL_ARGOCDS_ADDED="true"
     fi
 
-    while [[ "${ALL_ARGOCDS_ADDED}" = "false" ]]; do
-        info "The following ArgoCD servers have been configured:"
+    if should_install "argocd"; then
+        download_latest_release "argoproj/argo-cd" "argocd" || exit 1
+        install --mode=0755 "${TEMP_DIR}/argocd" "$HOME/.local/bin/argocd" || exit 1
+        info "🎉 Successfully installed ArgoCD!"
+    fi
 
-        gum style \
-            --border-foreground=212 \
-            --border=double \
-            --align=center \
-            --width=50 \
-            --margin="1 2" \
-            --padding="2 4 " \
-            "$(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }')"
+    if which xdg-open &>/dev/null || which open &>/dev/null; then
+        if ! argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${DEFAULT_ARGOCD_HOSTNAME}"; then
+            info "Logging into ArgoCD at ${DEFAULT_ARGOCD_HOSTNAME}..."
+            argocd login "${DEFAULT_ARGOCD_HOSTNAME}" --grpc-web --sso --skip-test-tls || exit 1
+        fi
 
-        if ! gum confirm --default=No "Are there any additional ArgoCD servers you want to setup?"; then
+        ARGOCD_CURRENT_CONTEXT="$(argocd context | grep '\*' | awk '{ print $2 }')"
+        for ARGOCD_SERVER in $(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }'); do
+            argocd context "${ARGOCD_SERVER}" 1>/dev/null || exit 1
+            if ! argocd version &>/dev/null; then
+                info "Need to relogin to ArgoCD at ${ARGOCD_SERVER}..."
+                argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
+            else
+                info "🎉 You're successfully authenticated to ArgoCD at $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+            fi
+        done
+
+        if [[ "${FORCE_ADD_MORE_ARGOCD}" = "true" ]]; then
+            ALL_ARGOCDS_ADDED="false"
+        else
             ALL_ARGOCDS_ADDED="true"
-            break
         fi
 
-        ARGOCD_SERVER=$(gum input --width=80 --placeholder="ArgoCD Server")
+        while [[ "${ALL_ARGOCDS_ADDED}" = "false" ]]; do
+            info "The following ArgoCD servers have been configured:"
 
-        if argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${ARGOCD_SERVER}"; then
-            warn "🚨 ${ARGOCD_SERVER} is already configured."
-            continue
+            gum style \
+                --border-foreground=212 \
+                --border=double \
+                --align=center \
+                --width=50 \
+                --margin="1 2" \
+                --padding="2 4 " \
+                "$(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }')"
+
+            if ! gum confirm --default=No "Are there any additional ArgoCD servers you want to setup?"; then
+                ALL_ARGOCDS_ADDED="true"
+                break
+            fi
+
+            ARGOCD_SERVER=$(gum input --width=80 --placeholder="ArgoCD Server")
+
+            if argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${ARGOCD_SERVER}"; then
+                warn "🚨 ${ARGOCD_SERVER} is already configured."
+                continue
+            fi
+
+            info "Logging into ArgoCD at ${ARGOCD_SERVER}..."
+            argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
+
+            info "🎉 You're successfully authenticated to $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+        done
+
+        argocd context "${ARGOCD_CURRENT_CONTEXT}" 1>/dev/null || exit 1
+    else
+        warn "🚨 Your system is unable to open a browser from a cli (no xdg-open or open tools are available). Skipping ArgoCD configuration."
+    fi
+
+    if ! helm search repo artifactory --fail-on-no-result -o yaml &>/dev/null; then
+        if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
+            info "Adding Artifactory helm repository..."
+            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+            [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+            helm repo add artifactory https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
         fi
-
-        info "Logging into ArgoCD at ${ARGOCD_SERVER}..."
-        argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
-
-        info "🎉 You're successfully authenticated to $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
-    done
-
-    argocd context "${ARGOCD_CURRENT_CONTEXT}" 1>/dev/null || exit 1
-else
-    warn "🚨 Your system is unable to open a browser from a cli (no xdg-open or open tools are available). Skipping ArgoCD configuration."
-fi
-
-if should_install "helm"; then
-    gum spin --show-error --title="Downloading Helm Installer..." -- \
-        curl -Lo "${TEMP_DIR}/get-helm-3" https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-    chmod 755 "${TEMP_DIR}/get-helm-3"
-    HELM_INSTALL_DIR="$HOME/.local/bin" USE_SUDO="false" gum spin --show-error \
-        --title="Installing Helm..." "${TEMP_DIR}/get-helm-3" || exit 1
-    info "🎉 Successfully installed Helm!"
-fi
-
-if ! helm search repo artifactory --fail-on-no-result -o yaml &>/dev/null; then
-    if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
-        info "Adding Artifactory helm repository..."
-        [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-        [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-        helm repo add artifactory https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+    else
+        info "🎉 You're already authenticated to the Artifactory helm repository!"
     fi
-else
-    info "🎉 You're already authenticated to the Artifactory helm repository!"
-fi
 
-if ! helm search repo artifactory-push --fail-on-no-result -o yaml &>/dev/null; then
-    if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
-        info "Adding Artifactory helm repository with push access..."
-        [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-        [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-        helm repo add artifactory-push https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+    if ! helm search repo artifactory-push --fail-on-no-result -o yaml &>/dev/null; then
+        if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
+            info "Adding Artifactory helm repository with push access..."
+            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+            [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+            helm repo add artifactory-push https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+        fi
+    else
+        info "🎉 You're already authenticated to the Artifactory helm repository with push access!"
     fi
-else
-    info "🎉 You're already authenticated to the Artifactory helm repository with push access!"
 fi
