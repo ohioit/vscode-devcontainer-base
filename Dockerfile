@@ -53,11 +53,11 @@ RUN groupadd -g $USER_GID $USERNAME && \
     echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME && \
     chmod 0440 /etc/sudoers.d/$USERNAME
 
-ARG SKAFFOLD_VERSION=2.11.0
-ARG KUBECTL_VERSION=1.27.11
-ARG HELM_VERSION=3.14.3
-ARG KUBESEAL_VERSION=0.26.1
-ARG K9S_VERSION=0.32.4
+ARG SKAFFOLD_VERSION=2.13.2
+ARG KUBECTL_VERSION=1.30.4
+ARG HELM_VERSION=3.16.2
+ARG KUBESEAL_VERSION=0.27.2
+ARG K9S_VERSION=0.32.5
 
 COPY install-system-dependencies.sh /usr/local/bin/install-system-dependencies
 RUN chmod +x /usr/local/bin/install-system-dependencies && \
