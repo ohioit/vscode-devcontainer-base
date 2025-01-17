@@ -9,6 +9,7 @@ FORCE_ADD_MORE_ARGOCD="${FORCE_ADD_MORE_ARGOCD:-""}"
 FORCE_ADD_MORE_GITHUB="${FORCE_ADD_MORE_GITHUB:-""}"
 ACCEPT_SUPPLY_CHAIN_SECURITY="${ACCEPT_SUPPLY_CHAIN_SECURITY:-""}"
 DEFAULT_RANCHER_HOSTNAME="rancher.oit.ohio.edu"
+DEFAULT_RANCHER_AUTH_PROVIDER="azureADProvider"
 DEFAULT_ARTIFACTORY_HOSTNAME="artifactory.oit.ohio.edu"
 DEFAULT_ARGOCD_HOSTNAME="argo.ops.kube.ohio.edu"
 DEFAULT_GITHUB_SERVERS=("github.ohio.edu" "github.com")
@@ -308,13 +309,23 @@ rancher_current_server() {
 rancher_login() {
     local rancher_hostname="$1"
     local rancher_token=""
-    local rancher_user_id=""
     local rancher_project=""
     local current_server=""
+
+    debug "Logging into $rancher_hostname"
 
     if [[ -z "$rancher_hostname" ]]; then
         error "❌ Error: No Rancher hostname provided."
         exit 1
+    fi
+
+    if [[ "${ENABLE_DEBUG}" = "true" ]]; then
+        if [[ -f "$HOME/.rancher/cli2.json" ]]; then
+            debug "Current Rancher configuration before token:"
+            yq "$HOME/.rancher/cli2.json"
+        else
+            debug "No Rancher configuration before token."
+        fi
     fi
 
     # Remove protocol if present
@@ -330,7 +341,12 @@ rancher_login() {
 
     info "It's time to login to Rancher, follow the prompts to login. NOTE: It may take a few seconds after\
  completing the login process for the CLI to notice and continue. NOTE: Ignore the URL containing 'authProviders'."
-    rancher_token_credential=$(rancher token --server "https://${rancher_hostname}" --user="$(whoami)" --auth-provider=azureADProvider)
+
+    if [[ -n "${DEFAULT_RANCHER_AUTH_PROVIDER}" ]]; then
+        rancher_token_credential=$(rancher token --server "${rancher_hostname}" --user="$(whoami)" --auth-provider="${DEFAULT_RANCHER_AUTH_PROVIDER}")
+    else
+        rancher_token_credential=$(rancher token --server "${rancher_hostname}" --user="$(whoami)")
+    fi
 
     if [[ "$?" -ne 0 ]]; then
         error "❌ Error: Failed to login to Rancher."
@@ -374,7 +390,12 @@ rancher_login() {
         cp "$HOME/.kube/config" "$HOME/.kube/config.rancherlogin"
     fi
 
-    rancher login --token="${rancher_token}" --context="${rancher_project}" --name="https://${rancher_hostname}" "https://${rancher_hostname}"
+    if [[ -f "$HOME/.rancher/cli2.json" ]]; then
+        debug "Current Rancher Configuration before login:"
+        yq "$HOME/.rancher/cli2.json"
+    fi
+
+    rancher login --token="${rancher_token}" --context="${rancher_project}" --name="${rancher_hostname}" "https://${rancher_hostname}"
 
     if [[ -n "${current_context}" ]]; then
         debug "Switching back to previous server ${current_server}"
@@ -384,6 +405,13 @@ rancher_login() {
     if [[ -f "$HOME/.kube/config" ]] && [[ -f "$HOME/.kube/config.rancherlogin" ]]; then
         rm "$HOME/.kube/config"
         mv "$HOME/.kube/config.rancherlogin" "$HOME/.kube/config"
+    fi
+
+    if [[ "${ENABLE_DEBUG}" = "true" ]]; then
+        if [[ -f "$HOME/.rancher/cli2.json" ]]; then
+            debug "Current Rancher configuration after login:"
+            yq "$HOME/.rancher/cli2.json"
+        fi
     fi
 }
 
@@ -403,12 +431,12 @@ setup_kube_context() {
         exit 1
     fi
 
-    DEFUALT_NAMESPACE=""
+    DEFAULT_NAMESPACE=""
     RANCHER_CURRENT_CLUSTER=""
 
     while [[ -z "${DEFAULT_NAMESPACE}" ]] || [[ -z "${RANCHER_CURRENT_CLUSTER}" ]]; do
         # Yes, we set this in the loop too just to make sure we're clean
-        DEFUALT_NAMESPACE=""
+        DEFAULT_NAMESPACE=""
         RANCHER_CURRENT_CLUSTER=""
 
         echo "Select your default Rancher server:"
@@ -418,11 +446,6 @@ setup_kube_context() {
         rancher context switch
 
         RANCHER_CURRENT_CLUSTER=$(rancher context current | sed -n 's/.*Cluster:\([^ ]*\).*/\1/p')
-
-        if ! kubectl config get-contexts -o name | grep -q "^${RANCHER_CURRENT_CLUSTER}$"; then
-            warn "The current cluster ${RANCHER_CURRENT_CLUSTER} is not in your kubeconfig. This should not be the case, please select a different cluster and project or hit CTRL+C and rerun this script."
-        fi
-
         AVAILABLE_NAMESPACES=$(gum spin --show-error --title="Fetching namespaces you have access to..." -- rancher namespaces -q)
 
         if [[ "$?" -ne 0 ]]; then
@@ -440,7 +463,7 @@ setup_kube_context() {
 
                 if ! [[ "$DEFAULT_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
                     warn "The namespace you selected (${DEFAULT_NAMESPACE}) is not a valid Kubernetes namespace name. This should not happen, please let ADP know and select a differnt namespace."
-                    DEFUALT_NAMESPACE=""
+                    DEFAULT_NAMESPACE=""
                     continue
                 fi
 
@@ -474,7 +497,7 @@ if ! bash -c 'help readarray' &>/dev/null; then
     exit 1
 fi
 
-while getopts "udThIRAGKSac:s:" arg; do
+while getopts "udThIRAGKSac:s:r:g:" arg; do
     case $arg in
         h) echo "Usage: $0 [options]"
            echo
@@ -488,6 +511,8 @@ while getopts "udThIRAGKSac:s:" arg; do
            echo "  -G           Prompt to add additional GitHub servers even if some are already configured."
            echo "  -K           Skip kubectl and kubeconfig."
            echo "  -a           Login to all ADP services, not just Rancher and Kubernetes."
+           echo "  -g <githubs> A space separated list of GitHub servers to add. Default: ${DEFAULT_GITHUB_SERVERS[*]}"
+           echo "  -r <rancher> The Rancher server to login to. Default: $DEFAULT_RANCHER_HOSTNAME"
            echo "  -c <context> The Kubernetes context to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_CONTEXT"
            echo "  -s <secret>  The Kubernetes secret to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_SECRET"
            echo "  -h           Show this help message."
@@ -506,6 +531,10 @@ while getopts "udThIRAGKSac:s:" arg; do
         a) SETUP_INTERNAL_SERVICES="true" ;;
         c) KUBE_CLIENT_CONFIG_CONTEXT="$OPTARG" ;;
         s) KUBE_CLIENT_CONFIG_SECRET="$OPTARG" ;;
+        r) DEFAULT_RANCHER_HOSTNAME="$OPTARG"
+           DEFAULT_RANCHER_AUTH_PROVIDER=""
+           ;;
+        g) read -r -a DEFAULT_GITHUB_SERVERS <<< "$OPTARG" ;;
         *) error "❌  Error: Invalid option $arg." && exit 1 ;;
     esac
 done
@@ -653,7 +682,7 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
     for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
         debug "Switching to Rancher server ${SERVER}..."
         rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
-        for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
+        for CLUSTER in $(rancher cluster list | grep -v CURRENT | grep -v local | sed 's/^*//g' | awk '{ print $1 }'); do
             if [[ -z "${SKIP_KUBECONFIG}" ]]; then
                 TEMP_KUBE_CONFIG=$(echo "${SERVER}-${CLUSTER}" | base64)
                 gum spin --show-error --title="Fetching kubeconfig for cluster ${CLUSTER}..." -- rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
@@ -671,6 +700,8 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
 
     debug "Latest Kubernetes version: ${KUBE_LATEST_VERSION}"
     debug "Oldest Kubernetes version: ${KUBE_OLDEST_VERSION}"
+
+    info "Validating Kubectl connectivity. Note, Rancher may ask you to login again."
 
     if should_install "kubectl"; then
         install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
@@ -707,34 +738,34 @@ if [[ -z "${SKIP_KUBECONFIG}" ]]; then
 
     if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
         KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
-    else
-        setup_kube_context
-    fi
 
-    CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'$(kubectl config current-context)'")].context.namespace}')
-    CURRENT_CLUSTER_URL=$(kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'$(kubectl config current-context)'")].cluster.server}')
-    CURRENT_RANCHER_SERVER_URL=$(echo "${CURRENT_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
-    CURRENT_RANCHER_SERVER_NAME=$(rancher server ls |  sed 's/^*//g' | grep -v CURRENT | awk '{ print $1 }' | grep "^${CURRENT_RANCHER_SERVER_URL}$")
+        CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'$(kubectl config current-context)'")].context.namespace}')
+        CURRENT_CLUSTER_URL=$(kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'$(kubectl config current-context)'")].cluster.server}')
+        CURRENT_RANCHER_SERVER_URL=$(echo "${CURRENT_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
+        CURRENT_RANCHER_SERVER_NAME=$(rancher server ls |  sed 's/^*//g' | grep -v CURRENT | awk '{ print $1 }' | grep "^${CURRENT_RANCHER_SERVER_URL}$")
 
-    debug "Current namespace: ${CURRENT_NAMESPACE}"
-    debug "Current cluster URL: ${CURRENT_CLUSTER_URL}"
-    debug "Current Rancher server: ${CURRENT_RANCHER_SERVER_URL}"
-    debug "Current Rancher server name: ${CURRENT_RANCHER_SERVER_NAME}"
+        debug "Current namespace: ${CURRENT_NAMESPACE}"
+        debug "Current cluster URL: ${CURRENT_CLUSTER_URL}"
+        debug "Current Rancher server: ${CURRENT_RANCHER_SERVER_URL}"
+        debug "Current Rancher server name: ${CURRENT_RANCHER_SERVER_NAME}"
 
-    if [[ -n "${CURRENT_NAMESPACE}" ]]; then
-        if ! (rancher namespaces -q | grep -q "${CURRENT_NAMESPACE}"); then
-            warn "Your current namespace ${CURRENT_NAMESPACE} does not exist in project $(rancher context current | sed 's/.*Project://')".
+        if [[ -n "${CURRENT_NAMESPACE}" ]]; then
+            if ! (rancher namespaces -q | grep -q "${CURRENT_NAMESPACE}"); then
+                warn "Your current namespace ${CURRENT_NAMESPACE} does not exist in project $(rancher context current | sed 's/.*Project://')".
+                setup_kube_context
+            fi
+        else
+            warn "Your current context $(kubectl config current-context) does not have a namespace set."
             setup_kube_context
         fi
     else
-        warn "Your current context $(kubectl config current-context) does not have a namespace set."
         setup_kube_context
     fi
 
     NEW_NAMESPACE=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)'")].context.namespace}')
     NEW_CLUSTER_URL=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)'")].cluster.server}')
     NEW_RANCHER_SERVER_URL=$(echo "${NEW_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
-    NEW_RANCHER_SERVER_NAME=$(rancher server ls |  sed 's/^*//g' | grep -v CURRENT | awk '{ print $1 }' | grep "^${NEW_RANCHER_SERVER_URL}$")
+    NEW_RANCHER_SERVER_NAME=$(rancher server ls |  sed 's/^*//g' | grep -v CURRENT | awk '{ print $2 }' | grep "^${NEW_RANCHER_SERVER_URL}$")
 
     if [[ -z "${NEW_NAMESPACE}" ]] && [[ -n "${CURRENT_NAMESPACE}" ]]; then
         debug "New kubeconfig doesn't have a namespace set on the current context, this is likely a weirdness from merging. Reusing the old namespace."
