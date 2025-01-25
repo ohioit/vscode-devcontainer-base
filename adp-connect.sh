@@ -390,9 +390,11 @@ rancher_login() {
         cp "$HOME/.kube/config" "$HOME/.kube/config.rancherlogin"
     fi
 
-    if [[ -f "$HOME/.rancher/cli2.json" ]]; then
-        debug "Current Rancher Configuration before login:"
-        yq "$HOME/.rancher/cli2.json"
+    if [[ "${ENABLE_DEBUG}" = "true" ]]; then
+        if [[ -f "$HOME/.rancher/cli2.json" ]]; then
+            debug "Current Rancher Configuration before login:"
+            yq "$HOME/.rancher/cli2.json"
+        fi
     fi
 
     rancher login --token="${rancher_token}" --context="${rancher_project}" --name="${rancher_hostname}" "https://${rancher_hostname}"
