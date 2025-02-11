@@ -93,9 +93,9 @@ error() {
 
 confirm() {
     if [[ "${HAVE_GUM}" ]]; then
-        gum confirm --default=No "$1"
+        gum confirm --default=No "$1" < /dev/tty
     else
-        read -p "$1 [y/N] " -n 1 -r
+        read -p "$1 [y/N] " -n 1 -r  < /dev/tty
         echo
         [[ $REPLY =~ ^[Yy]$ ]]
     fi
@@ -556,7 +556,7 @@ if [[ -z "${ACCEPT_SUPPLY_CHAIN_SECURITY}" ]]; then
     if ! confirm "⚠️  This script will utilize a series of resources from \
 the internet. The integrity of these cannot be assured, are you sure you want to \
 continue?"; then
-        info "😢 Quitting..."
+        info " I am 😢 Quitting..."
         exit 1
     fi
 else
