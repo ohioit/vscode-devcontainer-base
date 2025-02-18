@@ -13,8 +13,7 @@ on:
 jobs:
     build-and-push-latest:
       if: ${{ github.ref == 'refs/heads/main' }}
-      runs-on:
-        - mw
+      runs-on: ohioit
       permissions:
         contents: read
         packages: write
@@ -41,8 +40,7 @@ jobs:
 
     build-and-push-release:
       if: ${{ github.ref != 'refs/heads/main' }}
-      runs-on:
-        - mw
+      runs-on: ohioit
       permissions:
         contents: read
         packages: write
