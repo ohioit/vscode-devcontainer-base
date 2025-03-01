@@ -52,6 +52,11 @@ jobs:
             registry: ghcr.io
             username: ${{ github.actor }}
             password: ${{ secrets.GITHUB_TOKEN }}
+        - name: Determine tag name from branch name
+          env:
+            BRANCH_NAME: "${{ github.event.pull_request.head.ref }}"
+          run: |
+            echo "::set-output name=tag::$(${BRANCH_NAME} | cut -d '/' -f 2)"
         - name: Build necessary docker images
           uses: hiberbee/github-action-skaffold@1.27.0
           with:
@@ -60,7 +65,7 @@ jobs:
             command: build
             push: true
             cache: true
-            tag: "${{ github.ref | split: '/' | last }}"
+            tag: "${{ tag }}"
 
     build-and-push-release:
       if: startsWith(github.ref, 'refs/tags/')
@@ -91,10 +96,15 @@ jobs:
       if: ${{ github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'cs/') }}
       runs-on: ohioit
       steps:
+        - name: Determine tag name from branch name
+          env:
+            BRANCH_NAME: "${{ github.event.pull_request.head.ref }}"
+          run: |
+            echo "::set-output name=tag::$(${BRANCH_NAME} | cut -d '/' -f 2)"
         - name: Delete Docker tag
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-            IMAGE_TAG: "${{ github.event.pull_request.head.ref | split: '/' | last }}"
+            IMAGE_TAG: "${{ tag}}"
           run: |
             TAG="${IMAGE_TAG}"
             REPO=ohioit/vscode-devcontainer-base
