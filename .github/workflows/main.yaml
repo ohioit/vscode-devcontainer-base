@@ -94,8 +94,9 @@ jobs:
         - name: Delete Docker tag
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            IMAGE_TAG: "${{ github.event.pull_request.head.ref | split: '/' | last }}"
           run: |
-            TAG=${{ github.event.pull_request.head.ref | split: '/' | last }}
+            TAG="${IMAGE_TAG}"
             REPO=ohioit/vscode-devcontainer-base
             IMAGE=vscode-devcontainer-base
             curl -X DELETE \
