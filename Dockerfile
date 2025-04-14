@@ -63,8 +63,10 @@ COPY install-system-dependencies.sh /usr/local/bin/install-system-dependencies
 RUN chmod +x /usr/local/bin/install-system-dependencies && \
     /usr/local/bin/install-system-dependencies
 
+COPY adp-connect.sh /usr/local/bin/adp-connect
 COPY install-user-dependencies.sh /usr/local/bin/install-user-dependencies
-RUN chmod +x /usr/local/bin/install-user-dependencies
+RUN chmod +x /usr/local/bin/install-user-dependencies \
+    /usr/local/bin/adp-connect
 
 USER ${USER_UID}
 
@@ -90,4 +92,3 @@ RUN chmod u+rwx,g+rx,o+rx \
     mkdir -p /usr/local/lib/devcontainer/hooks.d/post-start
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint"]
-

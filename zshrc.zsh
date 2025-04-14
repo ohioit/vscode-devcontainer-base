@@ -48,7 +48,7 @@ bindkey '^l' _my_clear
 
 export EDITOR='vim'
 
-export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$HOME/.bin:/usr/local/bin:${PATH}"
+export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$HOME/.local/bin:$HOME/.bin:/usr/local/bin:${PATH}"
 
 if [[ -e "$HOME/.zsh/kubernetes.sh" ]]; then
 	source "$HOME/.zsh/kubernetes.sh"

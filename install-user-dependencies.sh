@@ -21,3 +21,6 @@ git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting.git "${
 git clone --depth=1 https://github.com/supercrabtree/k "${HOME}"/.oh-my-zsh/custom/plugins/k
 git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions "${HOME}"/.oh-my-zsh/custom/plugins/zsh-autosuggestions
 git clone --depth=1 https://github.com/johanhaleby/kubetail.git "${HOME}"/.oh-my-zsh/custom/plugins/kubetail
+
+echo "Installing ADP Tooling..."
+PATH="${HOME}/.local/bin:${PATH}" /usr/local/bin/adp-connect -D -I || { echo "ADP Tooling installation failed"; exit 1; }
