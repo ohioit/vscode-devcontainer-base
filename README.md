@@ -305,9 +305,9 @@ spec:
       labels:
         app: test
     spec:
-      imagePullPolicy: Always
       containers:
         - name: test
+          imagePullPolicy: Always
           image: ghcr.io/ohioit/vscode-devcontainer-base
           command: ["/usr/local/bin/wait-for-death"]
 ```
