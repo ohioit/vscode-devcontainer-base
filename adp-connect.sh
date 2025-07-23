@@ -1,6 +1,7 @@
 #!/bin/bash
 HAVE_GUM="$(which gum 2>/dev/null && 'true')"
 TEMP_DIR=$(mktemp -d)
+SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/ohioit/vscode-devcontainer-base/refs/heads/main/adp-connect.sh"
 FORCE_UPDATE="${FORCE_UPDATE:-""}"
 ENABLE_DEBUG="${ENABLE_DEBUG:-""}"
 SKIP_KUBECONFIG="${SKIP_KUBECONFIG:-""}"
@@ -108,7 +109,7 @@ get_ohioid() {
 }
 
 get_artifactory_token() {
-    info "🐳 It's time to login to Artifactory Go to https://artifatory.oit.ohio.edu
+    info "🐳 It's time to login to Artifactory. Go to https://artifactory.oit.ohio.edu
  and login. Once you've logged in, click on your username in the top right and select:
  → Profile → Generate an API Key (not an Identity Token) → Copy the API Key and paste it here."
     gum input --width=80 --placeholder="Artifactory Token"
@@ -500,6 +501,51 @@ if ! bash -c 'help readarray' &>/dev/null; then
     exit 1
 fi
 
+if ! [[ -d "$HOME/.local/bin" ]]; then
+    if ! mkdir -p "${HOME}"/.local/bin 2>/dev/null; then
+        echo "❌ Error: Failed to create directory ${HOME}/.local/bin. Please check your permissions or available disk space."
+        exit 1
+    fi
+fi
+
+if ! [ -t 0 ]; then
+    echo "Looks like you're running non-interactive, like from 'curl'."
+    echo "Since this tool asks a lot of questions, it cannot be run this way. Installing to ${HOME}/.local/bin..."
+
+    curl -s "${SCRIPT_SOURCE_URL}" -o "${HOME}/.local/bin/adp-connect"
+    chmod +x "${HOME}/.local/bin/adp-connect"
+
+    if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+        echo "Please ensure that \$HOME/.local/bin is in your PATH."
+
+        case "$(basename "$SHELL")" in
+            bash)
+                echo "You should be able to add this line to your ~/.bashrc or ~/.bash_profile:"
+                echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+                ;;
+            zsh)
+                echo "You should be able to add this line to your ~/.zshrc:"
+                echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+                ;;
+            fish)
+                echo "You should be able to add this line to your ~/.config/fish/config.fish:"
+                echo "    set -gx PATH \$HOME/.local/bin \$PATH"
+                ;;
+            csh|tcsh)
+                echo "You should be able to add this line to your ~/.cshrc:"
+                echo "    set path = (\$HOME/.local/bin \$path)"
+                ;;
+            *)
+                echo "Please add \$HOME/.local/bin to your PATH in your shell's configuration file."
+                ;;
+        esac
+    fi
+
+    echo "adp-connect has been installed, please re-run it in a terminal."
+
+    exit 1
+fi
+
 while getopts "udThIRAGDKSac:s:r:g:" arg; do
     case $arg in
         h) echo "Usage: $0 [options]"
@@ -544,17 +590,6 @@ while getopts "udThIRAGDKSac:s:r:g:" arg; do
     esac
 done
 
-if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-    echo "The directory $HOME/.local/bin is not in your PATH. Please add it to your shell profile."
-    echo "For example, add the following line to your ~/.bashrc or ~/.zshrc:"
-    echo
-    echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-    echo
-    echo "Then reopen your terminal."
-
-    exit 1
-fi
-
 if [[ -z "${ACCEPT_SUPPLY_CHAIN_SECURITY}" ]]; then
     if ! confirm "⚠️  This script will utilize a series of resources from \
 the internet. The integrity of these cannot be assured, are you sure you want to \
@@ -566,10 +601,6 @@ else
     warn "🔓 This script will utilize a series of resources from the internet \
 the integrity of these cannot be assured. You've accepted this risk with the -I flag or
 the ACCEPT_SUPPLY_CHAIN_SECURITY environment variable. Continuing."
-fi
-
-if ! [[ -d "$HOME/.local/bin" ]]; then
-    mkdir -p "$HOME/.local/bin"
 fi
 
 if should_install "gum"; then
@@ -587,6 +618,12 @@ if should_install "yq"; then
     INSANE_CHECKSUMS="true" download_latest_release "mikefarah/yq" "yq" || exit 1
     install --mode=0755 "${TEMP_DIR}/yq" "$HOME/.local/bin/yq" || exit 1
     info "🎉 Successfully installed yq!"
+elif ! yq --version | grep -q mikefarah; then
+    error "🚨 You have a version of 'yq' installed that is incompatible with this script."
+    error "you'll have to remove it to continue. Don't worry, this script will install a better one"
+    error " (https://github.com/mikefarah/yq)."
+
+    exit 1
 fi
 
 should_install "rancher"
@@ -931,10 +968,12 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
     fi
 
     if ! git config --global --get user.name &>/dev/null; then
+        info "? What name will you use for git commits?"
         git config --global user.name "$(gum input --width=80 --placeholder="Your name for git commits:")" || exit 1
     fi
 
     if ! git config --global --get user.email &>/dev/null; then
+        info "? What email will you use for git commits?"
         git config --global user.email "$(gum input --width=80 --placeholder="Your OHIO email for git commits:")" || exit 1
     fi
 
@@ -972,7 +1011,7 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
                 if [[ -z "${ARTIFACTORY_TOKEN}" ]] || [[ -z "${USER_OHIOID}" ]]; then
                     warn "Skipping Artifactory login for Docker and Helm. You'll need to configure these manually or rerun this script."
                 else
-                    if docker login -u "$(USER_OHIOID)" --password-stdin docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "$(ARTIFACTORY_TOKEN)"; then
+                    if docker login -u "${USER_OHIOID}" --password-stdin docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "${ARTIFACTORY_TOKEN}"; then
                         info "🎉 Successfully logged into Artifactory's Docker Registry!"
                     else
                         exit 1
@@ -1070,5 +1109,10 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
         else
             info "🎉 You're already authenticated to the Artifactory helm repository with push access!"
         fi
+
+        helm repo update
     fi
+
+    info "🎉 Everything should now be setup. You should have the following tools installed and ready to use:"
+    ls -1 "${HOME}"/.local/bin
 fi
