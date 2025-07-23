@@ -109,7 +109,7 @@ get_ohioid() {
 }
 
 get_artifactory_token() {
-    info "🐳 It's time to login to Artifactory Go to https://artifactory.oit.ohio.edu
+    info "🐳 It's time to login to Artifactory. Go to https://artifactory.oit.ohio.edu
  and login. Once you've logged in, click on your username in the top right and select:
  → Profile → Generate an API Key (not an Identity Token) → Copy the API Key and paste it here."
     gum input --width=80 --placeholder="Artifactory Token"
@@ -501,10 +501,16 @@ if ! bash -c 'help readarray' &>/dev/null; then
     exit 1
 fi
 
+if ! [[ -d "$HOME/.local/bin" ]]; then
+    if ! mkdir -p "${HOME}"/.local/bin 2>/dev/null; then
+        echo "❌ Error: Failed to create directory ${HOME}/.local/bin. Please check your permissions or available disk space."
+        exit 1
+    fi
+fi
+
 if ! [ -t 0 ]; then
     echo "Looks like you're running non-interactive, like from 'curl'."
     echo "Since this tool asks a lot of questions, it cannot be run this way. Installing to ${HOME}/.local/bin..."
-    mkdir -p "${HOME}"/.local/bin 2>/dev/null || true
 
     curl -s "${SCRIPT_SOURCE_URL}" -o "${HOME}/.local/bin/adp-connect"
     chmod +x "${HOME}/.local/bin/adp-connect"
@@ -597,10 +603,6 @@ the integrity of these cannot be assured. You've accepted this risk with the -I 
 the ACCEPT_SUPPLY_CHAIN_SECURITY environment variable. Continuing."
 fi
 
-if ! [[ -d "$HOME/.local/bin" ]]; then
-    mkdir -p "$HOME/.local/bin"
-fi
-
 if should_install "gum"; then
     download_latest_release "charmbracelet/gum" "gum" "tar.gz" || exit 1
     extract_download "gum" "tar.gz" || exit 1
@@ -619,7 +621,7 @@ if should_install "yq"; then
 elif ! yq --version | grep -q mikefarah; then
     error "🚨 You have a version of 'yq' installed that is incompatible with this script."
     error "you'll have to remove it to continue. Don't worry, this script will install a better one"
-    error "(https://github.com/mikefarah/yq)".
+    error " (https://github.com/mikefarah/yq)."
 
     exit 1
 fi
