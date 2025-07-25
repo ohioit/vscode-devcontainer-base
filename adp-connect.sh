@@ -725,7 +725,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
         for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
             debug "Switching to Rancher server ${SERVER}..."
             rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
-            for CLUSTER in $(rancher cluster list | grep -v CURRENT | grep -v local | sed 's/^*//g' | awk '{ print $1 }'); do
+            for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
                 if [[ -z "${SKIP_KUBECONFIG}" ]]; then
                     TEMP_KUBE_CONFIG=$(echo "${SERVER}-${CLUSTER}" | base64)
                     gum spin --show-error --title="Fetching kubeconfig for cluster ${CLUSTER}..." -- rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
