@@ -77,6 +77,16 @@ info() {
     fi
 }
 
+instruction() {
+    gum style \
+            --border-foreground=212 \
+            --border=double \
+            --align=center \
+            --width=70 \
+            --margin="1 2" \
+            --padding="2 4 " "$1"
+}
+
 warn() {
     if [[ "${HAVE_GUM}" ]]; then
         gum log -l warn "$1"
@@ -109,9 +119,9 @@ get_ohioid() {
 }
 
 get_artifactory_token() {
-    info "🐳 It's time to login to Artifactory. Go to https://artifactory.oit.ohio.edu
+    instruction "🐳 It's time to login to Artifactory. Go to https://artifactory.oit.ohio.edu
  and login. Once you've logged in, click on your username in the top right and select:
- → Profile → Generate an API Key (not an Identity Token) → Copy the API Key and paste it here."
+ → Edit Profile → Generate an API Key (not an Identity Token) → Copy the API Key and paste it here."
     gum input --width=80 --placeholder="Artifactory Token"
 
     echo "${ARTIFACTORY_TOKEN}"
@@ -333,7 +343,7 @@ rancher_login() {
     # Remove protocol if present
     rancher_hostname=$(echo "$rancher_hostname" | sed -e 's|^[a-zA-Z]*://||')
 
-    if [[ "$(rancher server ls | grep -c "${rancher_hostname}")" -gt 1 ]]; then
+    if [[ -e "${HOME}/.rancher/cli2.json" ]] && [[ "$(rancher server ls | grep -c "${rancher_hostname}")" -gt 1 ]]; then
         warn "🚨 Multiple Rancher servers are configured with the hostname ${rancher_hostname}. Cleaning that up."
 
         for SERVER in $(rancher server ls | grep "${rancher_hostname}" | sed 's/^*//' | awk '{ print $1 }'); do
@@ -341,8 +351,9 @@ rancher_login() {
         done
     fi
 
-    info "It's time to login to Rancher, follow the prompts to login. NOTE: It may take a few seconds after\
- completing the login process for the CLI to notice and continue. NOTE: Ignore the URL containing 'authProviders'."
+    instruction "It's time to login to Rancher. Look below for a token and a URL. Go to the URL in any browser \
+(CTRL+Click on the link in most terminals) and enter the token provided. It may take a second after completing the login process for the CLI to notice and continue."
+    warn "If you see a URL below that contains the string 'authProviders', ignore it."
 
     if [[ -n "${DEFAULT_RANCHER_AUTH_PROVIDER}" ]]; then
         rancher_token_credential=$(rancher token --server "${rancher_hostname}" --user="$(whoami)" --auth-provider="${DEFAULT_RANCHER_AUTH_PROVIDER}")
@@ -508,44 +519,6 @@ if ! [[ -d "$HOME/.local/bin" ]]; then
     fi
 fi
 
-if ! [ -t 0 ]; then
-    echo "Looks like you're running non-interactive, like from 'curl'."
-    echo "Since this tool asks a lot of questions, it cannot be run this way. Installing to ${HOME}/.local/bin..."
-
-    curl -s "${SCRIPT_SOURCE_URL}" -o "${HOME}/.local/bin/adp-connect"
-    chmod +x "${HOME}/.local/bin/adp-connect"
-
-    if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-        echo "Please ensure that \$HOME/.local/bin is in your PATH."
-
-        case "$(basename "$SHELL")" in
-            bash)
-                echo "You should be able to add this line to your ~/.bashrc or ~/.bash_profile:"
-                echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-                ;;
-            zsh)
-                echo "You should be able to add this line to your ~/.zshrc:"
-                echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-                ;;
-            fish)
-                echo "You should be able to add this line to your ~/.config/fish/config.fish:"
-                echo "    set -gx PATH \$HOME/.local/bin \$PATH"
-                ;;
-            csh|tcsh)
-                echo "You should be able to add this line to your ~/.cshrc:"
-                echo "    set path = (\$HOME/.local/bin \$path)"
-                ;;
-            *)
-                echo "Please add \$HOME/.local/bin to your PATH in your shell's configuration file."
-                ;;
-        esac
-    fi
-
-    echo "adp-connect has been installed, please re-run it in a terminal."
-
-    exit 1
-fi
-
 while getopts "udThIRAGDKSac:s:r:g:" arg; do
     case $arg in
         h) echo "Usage: $0 [options]"
@@ -590,6 +563,45 @@ while getopts "udThIRAGDKSac:s:r:g:" arg; do
     esac
 done
 
+if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" -ne "true" ]]; then
+    echo "Looks like you're running non-interactive, like from 'curl'."
+    echo "Since this tool asks a lot of questions, it cannot be run this way. Installing to ${HOME}/.local/bin..."
+
+    curl -s "${SCRIPT_SOURCE_URL}" -o "${HOME}/.local/bin/adp-connect"
+    chmod +x "${HOME}/.local/bin/adp-connect"
+
+    if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+        echo "Please ensure that \$HOME/.local/bin is in your PATH."
+
+        case "$(basename "$SHELL")" in
+            bash)
+                echo "You should be able to add this line to your ~/.bashrc or ~/.bash_profile:"
+                echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+                ;;
+            zsh)
+                echo "You should be able to add this line to your ~/.zshrc:"
+                echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+                ;;
+            fish)
+                echo "You should be able to add this line to your ~/.config/fish/config.fish:"
+                echo "    set -gx PATH \$HOME/.local/bin \$PATH"
+                ;;
+            csh|tcsh)
+                echo "You should be able to add this line to your ~/.cshrc:"
+                echo "    set path = (\$HOME/.local/bin \$path)"
+                ;;
+            *)
+                echo "Please add \$HOME/.local/bin to your PATH in your shell's configuration file."
+                ;;
+        esac
+    fi
+
+    echo "adp-connect has been installed, please re-run it in a terminal."
+
+    exit 1
+fi
+
+
 if [[ -z "${ACCEPT_SUPPLY_CHAIN_SECURITY}" ]]; then
     if ! confirm "⚠️  This script will utilize a series of resources from \
 the internet. The integrity of these cannot be assured, are you sure you want to \
@@ -599,7 +611,7 @@ continue?"; then
     fi
 else
     warn "🔓 This script will utilize a series of resources from the internet \
-the integrity of these cannot be assured. You've accepted this risk with the -I flag or
+the integrity of these cannot be assured. You've accepted this risk with the -I flag or \
 the ACCEPT_SUPPLY_CHAIN_SECURITY environment variable. Continuing."
 fi
 
@@ -628,7 +640,7 @@ fi
 
 should_install "rancher"
 INSTALL_RANCHER=$?
-NEEDED_RANCHER_VERSION=2.9.0
+NEEDED_RANCHER_VERSION=2.11.3
 
 if [[ "${INSTALL_RANCHER}" = "1" ]]; then
     compare_versions "$(rancher --version | awk '{ print $3 }')" "${NEEDED_RANCHER_VERSION}"
@@ -649,23 +661,30 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
     debug "Checking for existing Rancher CLI configuration..."
     ALL_RANCHERS_ADDED="false"
     if [[ -f "$HOME/.rancher/cli2.json" ]]; then
-        if [[ -z "${FORCE_ADD_MORE_RANCHERS}" ]]; then
-            ALL_RANCHERS_ADDED="true"
-        fi
+        if [[ -e "${HOME}"/.rancher/cli2.json ]] && [[ -z "$(yq -r '.Servers[].accessKey' "${HOME}"/.rancher/cli2.json)" ]]; then
+            debug "Detected incomplete Rancher CLI configuration, deleting it."
+            rm "${HOME}"/.rancher/cli2.json
 
-        debug "Validating existing configuration..."
-        if ! [[ "$(yq -r '.Server.rancherDefault' < "$HOME/.rancher/cli2.json")" = "null" ]]; then
-            warn "🚨 A 'rancherDefault' entry exists in your configuration and is known to cause problems. It's\
-    recommended to clear your config and start over."
-            if confirm "Would you like to clear your Rancher CLI configuration?"; then
-                rm -f "$HOME/.rancher/cli2.json"
+            rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
+        else
+            if [[ -z "${FORCE_ADD_MORE_RANCHERS}" ]]; then
+                ALL_RANCHERS_ADDED="true"
+            fi
+
+            debug "Validating existing configuration..."
+            if ! [[ "$(yq -r '.Server.rancherDefault' < "$HOME/.rancher/cli2.json")" = "null" ]]; then
+                warn "🚨 A 'rancherDefault' entry exists in your configuration and is known to cause problems. It's\
+        recommended to clear your config and start over."
+                if confirm "Would you like to clear your Rancher CLI configuration?"; then
+                    rm -f "$HOME/.rancher/cli2.json"
+                    rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
+                fi
+            fi
+
+            if [[ "$(yq -r '.Servers | length' < "$HOME/.rancher/cli2.json")" = "0" ]]; then
+                debug "Found $(yq -r '.Servers | length' < "$HOME/.rancher/cli2.json") servers in this configuration."
                 rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
             fi
-        fi
-
-        if [[ "$(yq -r '.Servers | length' < "$HOME/.rancher/cli2.json")" = "0" ]]; then
-            debug "Found $(yq -r '.Servers | length' < "$HOME/.rancher/cli2.json") servers in this configuration."
-            rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
         fi
     else
         rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
