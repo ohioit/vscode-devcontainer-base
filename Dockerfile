@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 LABEL org.opencontainers.image.source https://github.com/ohioit/vscode-devcontainer-base
 
@@ -17,16 +17,18 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         curl \
         procps \
         iputils-ping \
+        iproute2 \
         git \
         curl \
         sudo \
         zsh \
         shellcheck \
         jq \
-        netcat \
+        netcat-traditional \
         dnsutils \
-        python3.9 \
+        python3.12 \
         python3-pip \
+        python3-flask \
         locales \
         apt-transport-https \
         ca-certificates \
@@ -38,7 +40,6 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         rsync \
         nmap \
         less && \
-    pip3 install yq && \
     sed -i '/'${LANG}'/s/^# //g' /etc/locale.gen && \
     locale-gen && \
     apt-get autoremove --purge && rm -Rf /var/cache/apt/archives && \
@@ -48,7 +49,9 @@ ENV LANG ${LANG}
 ENV LANGUAGE ${LANGUAGE}
 ENV LC_ALL ${LC_ALL}
 
-RUN groupadd -g $USER_GID $USERNAME && \
+RUN userdel ubuntu && \
+    rm -Rf /home/ubuntu && \
+    groupadd -g $USER_GID $USERNAME && \
     useradd -s /bin/zsh -m -d /home/vscode -u $USER_UID -g $USER_GID $USERNAME && \
     mkdir -p /etc/sudoers.d && \
     echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME && \
