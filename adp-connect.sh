@@ -1,13 +1,15 @@
 #!/bin/bash
 HAVE_GUM="$(which gum 2>/dev/null && 'true')"
 TEMP_DIR=$(mktemp -d)
-SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/ohioit/vscode-devcontainer-base/refs/heads/main/adp-connect.sh"
+SCRIPT_SOURCE_BRANCH="${SCRIPT_SOURCE_BRANCH:-main}"
+SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/ohioit/vscode-devcontainer-base/refs/heads/${SCRIPT_SOURCE_BRANCH}/adp-connect.sh"
 FORCE_UPDATE="${FORCE_UPDATE:-""}"
 ENABLE_DEBUG="${ENABLE_DEBUG:-""}"
 SKIP_KUBECONFIG="${SKIP_KUBECONFIG:-""}"
 FORCE_ADD_MORE_RANCHERS="${FORCE_ADD_MORE_RANCHERS:-""}"
 FORCE_ADD_MORE_ARGOCD="${FORCE_ADD_MORE_ARGOCD:-""}"
 FORCE_ADD_MORE_GITHUB="${FORCE_ADD_MORE_GITHUB:-""}"
+FORCE_TRACE_MODE="${FORCE_TRACE_MODE:-"false"}"
 ONLY_DOWNLOAD="${ONLY_DOWNLOAD:-""}"
 ACCEPT_SUPPLY_CHAIN_SECURITY="${ACCEPT_SUPPLY_CHAIN_SECURITY:-""}"
 DEFAULT_RANCHER_HOSTNAME="rancher.oit.ohio.edu"
@@ -24,6 +26,10 @@ USER_OHIOID=""
 ARTIFACTORY_TOKEN=""
 
 HTTP_DATA_METHODS=("POST" "PUT" "PATCH")
+
+if [[ "${FORCE_TRACE_MODE}" = "true" ]]; then
+    set -x
+fi
 
 cleanup() {
     rm -rf "$TEMP_DIR"
@@ -491,7 +497,7 @@ setup_kube_context() {
 }
 
 ALL_BINARIES_AVAILABLE="true"
-for BINARY in curl tar awk sed grep; do
+for BINARY in curl tar awk sed grep git; do
     if ! which "${BINARY}" &>/dev/null; then
         error "❌ Error: ${BINARY} is required but not installed. Please contact ADP for assistance and let us know what operating system you're using."
         ALL_BINARIES_AVAILABLE="false"
@@ -501,6 +507,8 @@ done
 if [[ "${ALL_BINARIES_AVAILABLE}" = "false" ]]; then
     exit 1
 fi
+
+git check-ref-format --branch "${SCRIPT_SOURCE_BRANCH}" >/dev/null || exit 1
 
 if ! grep --help | grep -q 'extended-regexp'; then
     error "❌ Error: Your version of grep does not support extended regular expressions. PPlease contact ADP for assistance and let us know what operating system you're using."
@@ -563,7 +571,7 @@ while getopts "udThIRAGDKSac:s:r:g:" arg; do
     esac
 done
 
-if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" -ne "true" ]]; then
+if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" != "true" ]]; then
     echo "Looks like you're running non-interactive, like from 'curl'."
     echo "Since this tool asks a lot of questions, it cannot be run this way. Installing to ${HOME}/.local/bin..."
 
