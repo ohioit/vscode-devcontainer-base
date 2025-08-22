@@ -357,7 +357,7 @@ rancher_login() {
         done
     fi
 
-    instruction "It's time to login to Rancher. Look below for a token and a URL. Go to the URL in any browser \
+    instruction "It's time to login to Rancher at ${rancher_hostname}. Look below for a token and a URL. Go to the URL in any browser \
 (CTRL+Click on the link in most terminals) and enter the token provided. It may take a second after completing the login process for the CLI to notice and continue."
     warn "If you see a URL below that contains the string 'authProviders', ignore it."
 
@@ -460,10 +460,10 @@ setup_kube_context() {
         DEFAULT_NAMESPACE=""
         RANCHER_CURRENT_CLUSTER=""
 
-        echo "Select your default Rancher server:"
+        info "Select your default Rancher server:"
         rancher server switch
 
-        echo "Select your default Kubernetes cluster and project:"
+        info "Select your default Kubernetes cluster and project:"
         rancher context switch
 
         RANCHER_CURRENT_CLUSTER=$(rancher context current | sed -n 's/.*Cluster:\([^ ]*\).*/\1/p')
@@ -604,7 +604,9 @@ if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" != "true" ]]; then
         esac
     fi
 
-    echo "adp-connect has been installed, please re-run it in a terminal."
+    # shellcheck disable=SC2016
+    echo 'adp-connect has been installed, please re-run it in a terminal with the command \
+adp-connect, use `adp-connect -h` for help.'
 
     exit 1
 fi
@@ -901,9 +903,10 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
     done
 
     if [[ "${KUBESEAL_FAILED}" = "true" ]]; then
-        warn "🚨 You won't be able to seal secrets for these clusters locally until this is resolved. It's likely a network issue. \
-    Please make sure you're on the VPN or VDI and can otherwise access the clusters with kubectl. If this keeps failing, \
-    run this script again with the -d flag for more output."
+        warn "🚨 You won't be able to seal secrets for these clusters locally until this is resolved. \
+This may be ok if you don't intend to use those clusters; otherwise, it may be a networking issue.
+Please make sure you're on the VPN or VDI and can otherwise access the clusters with kubectl. If this keeps failing, \
+run this script again with the -d flag for more output."
 
         if [[ "${ENABLE_DEBUG}" ]]; then
             debug "kubeseal error output:"
