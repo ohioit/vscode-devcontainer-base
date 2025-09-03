@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#HAVE_GUM="$(which gum &>/dev/null && echo 'true')"
+HAVE_GUM="$(which gum &>/dev/null && echo 'true')"
 TEMP_DIR=$(mktemp -d)
 SCRIPT_SOURCE_BRANCH="${SCRIPT_SOURCE_BRANCH:-main}"
 SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/ohioit/vscode-devcontainer-base/refs/heads/${SCRIPT_SOURCE_BRANCH}/adp-connect.sh"
@@ -235,7 +235,11 @@ download_latest_release() {
     latest_release=$(echo "${latest_release_json}" | grep -e '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
 
     for arch in "${LOCAL_ARCH[@]}"; do
-        binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?(\.|$format)\"" | cut -d '"' -f 4)
+        if [[ -n "$format" ]]; then
+            binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?(\.|$format)\"" | cut -d '"' -f 4)
+        else
+            binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?" | cut -d '"' -f 4)
+        fi
 
         if [[ -n "$binary_url" ]]; then
             break
@@ -768,6 +772,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
         rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
 
         if ! gum spin --show-error --title="Checking ${SERVER}..." rancher project list; then
+            yq -i '.Servers["'"${SERVER}"'"].project = ""' "$HOME/.rancher/cli2.json"
             rancher_login "${SERVER}"
         fi
     done
