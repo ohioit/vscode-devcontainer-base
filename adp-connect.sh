@@ -226,7 +226,7 @@ download_latest_release() {
     done
 
     if [[ -z "$binary_url" ]]; then
-        error "❌ Error: Could not find the binary $binary_name for $LOCAL_OS/$LOCAL_ARCH in the latest release."
+        error "❌ Error: Could not find the binary $binary_name for $LOCAL_OS/${LOCAL_ARCH[0]} in the latest release."
 
         if [[ "${ENABLE_DEBUG}" = "true" ]]; then
             if which yq &>/dev/null; then
@@ -355,6 +355,7 @@ rancher_login() {
     fi
 
     # Remove protocol if present
+    # shellcheck disable=SC2001
     rancher_hostname=$(echo "$rancher_hostname" | sed -e 's|^[a-zA-Z]*://||')
 
     if [[ -e "${HOME}/.rancher/cli2.json" ]] && [[ "$(rancher server ls | grep -c "${rancher_hostname}")" -gt 1 ]]; then
@@ -462,6 +463,11 @@ setup_kube_context() {
         exit 1
     fi
 
+    instruction "It's time to setup the default Kubernetes cluster, project, and namespace you'll be using. \
+You'll be presented with lists and asked to pick a number; pay attention to the columns. You'll first select \
+your default Rancher server (if you have multiple) and then your Cluster and Project. Look for the row with \
+the project you'll use most often and enter the number in the first column."
+
     DEFAULT_NAMESPACE=""
     RANCHER_CURRENT_CLUSTER=""
 
@@ -563,6 +569,13 @@ if [[ "${ALL_BINARIES_AVAILABLE}" = "false" ]]; then
     exit 1
 fi
 
+if ! [[ -d "$HOME/.local/bin" ]]; then
+    if ! mkdir -p "${HOME}"/.local/bin 2>/dev/null; then
+        echo "❌ Error: Failed to create directory ${HOME}/.local/bin. Please check your permissions or available disk space."
+        exit 1
+    fi
+fi
+
 if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" != "true" ]]; then
     echo "Looks like you're running non-interactive, like from 'curl'."
     echo "Since this tool asks a lot of questions, it cannot be run this way. Installing to ${HOME}/.local/bin..."
@@ -597,8 +610,8 @@ if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" != "true" ]]; then
     fi
 
     # shellcheck disable=SC2016
-    echo 'adp-connect has been installed, please re-run it in a terminal with the command \
-adp-connect, use `adp-connect -h` for help.'
+    echo 'adp-connect has been installed, please re-run it in a terminal with the command
+ adp-connect, use `adp-connect -h` for help.'
 
     exit 1
 fi
@@ -620,13 +633,6 @@ git check-ref-format --branch "${SCRIPT_SOURCE_BRANCH}" >/dev/null || exit 1
 if ! (grep --help 2>/dev/null | grep -q 'extended-regexp') && ! (which sw_vers >/dev/null && [ "$(sw_vers | grep ProductName | awk '{print $2}' | tr '[:upper:]' '[:lower:]')" = "macos" ]); then
     error "❌ Error: Your version of grep does not support extended regular expressions. Please contact ADP for assistance and let us know what operating system you're using."
     exit 1
-fi
-
-if ! [[ -d "$HOME/.local/bin" ]]; then
-    if ! mkdir -p "${HOME}"/.local/bin 2>/dev/null; then
-        echo "❌ Error: Failed to create directory ${HOME}/.local/bin. Please check your permissions or available disk space."
-        exit 1
-    fi
 fi
 
 if [[ -z "${ACCEPT_SUPPLY_CHAIN_SECURITY}" ]]; then
@@ -1166,7 +1172,7 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
 
         helm repo update
     fi
-
-    info "🎉 Everything should now be setup. You should have the following tools installed and ready to use:"
-    ls -1 "${HOME}"/.local/bin
 fi
+
+info "🎉 Everything should now be setup. You should have the following tools installed and ready to use:"
+ls -1 "${HOME}"/.local/bin
