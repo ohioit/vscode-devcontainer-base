@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 HAVE_GUM="$(which gum 2>/dev/null && 'true')"
 TEMP_DIR=$(mktemp -d)
 SCRIPT_SOURCE_BRANCH="${SCRIPT_SOURCE_BRANCH:-main}"
@@ -10,6 +10,7 @@ FORCE_ADD_MORE_RANCHERS="${FORCE_ADD_MORE_RANCHERS:-""}"
 FORCE_ADD_MORE_ARGOCD="${FORCE_ADD_MORE_ARGOCD:-""}"
 FORCE_ADD_MORE_GITHUB="${FORCE_ADD_MORE_GITHUB:-""}"
 FORCE_TRACE_MODE="${FORCE_TRACE_MODE:-"false"}"
+FORCE_CURRENT_SHELL="${FORCE_CURRENT_SHELL:-"false"}"
 ONLY_DOWNLOAD="${ONLY_DOWNLOAD:-""}"
 ACCEPT_SUPPLY_CHAIN_SECURITY="${ACCEPT_SUPPLY_CHAIN_SECURITY:-""}"
 DEFAULT_RANCHER_HOSTNAME="rancher.oit.ohio.edu"
@@ -84,13 +85,17 @@ info() {
 }
 
 instruction() {
-    gum style \
-            --border-foreground=212 \
-            --border=double \
-            --align=center \
-            --width=70 \
-            --margin="1 2" \
-            --padding="2 4 " "$1"
+    if [[ "${HAVE_GUM}" ]]; then
+        gum style \
+                --border-foreground=212 \
+                --border=double \
+                --align=center \
+                --width=70 \
+                --margin="1 2" \
+                --padding="2 4 " "$1"
+    else
+        echo -e "\e[35mℹ️ $1\e[0m"
+    fi
 }
 
 warn() {
@@ -134,23 +139,26 @@ get_artifactory_token() {
 }
 
 compare_versions() {
-  # Copilot wrote this one and I'm too lazy to fully verify or grok it.
-  # Remove leading 'v' if present
-  ver1="${1#v}"
-  ver2="${2#v}"
+    # Remove leading 'v' if present
+    local ver1="${1#v}"
+    local ver2="${2#v}"
 
-  IFS='.' read -r -a ver1 <<< "$ver1"
-  IFS='.' read -r -a ver2 <<< "$ver2"
+    local IFS='.'
+    # shellcheck disable=SC2206
+    local ver1_arr=($ver1)
+    # shellcheck disable=SC2206
+    local ver2_arr=($ver2)
 
-  for ((i=0; i<${#ver1[@]}; i++)); do
-    if [[ ${ver1[i]} -gt ${ver2[i]:-0} ]]; then
-      return 1
-    elif [[ ${ver1[i]} -lt ${ver2[i]:-0} ]]; then
-      return 2
-    fi
-  done
+    local i
+    for ((i=0; i<${#ver1_arr[@]}; i++)); do
+        if [[ ${ver1_arr[i]} -gt ${ver2_arr[i]:-0} ]]; then
+            return 1
+        elif [[ ${ver1_arr[i]} -lt ${ver2_arr[i]:-0} ]]; then
+            return 2
+        fi
+    done
 
-  return 0
+    return 0
 }
 
 version_sort() {
@@ -367,6 +375,7 @@ rancher_login() {
         rancher_token_credential=$(rancher token --server "${rancher_hostname}" --user="$(whoami)")
     fi
 
+    # shellcheck disable=SC2181
     if [[ "$?" -ne 0 ]]; then
         error "❌ Error: Failed to login to Rancher."
         exit 1
@@ -374,6 +383,7 @@ rancher_login() {
 
     rancher_token=$(echo "${rancher_token_credential}" | yq -r '.status.token')
 
+    # shellcheck disable=SC2181
     if [[ "$?" -ne 0 ]] || [[ -z "$rancher_token" ]]; then
         error "❌ Error: Failed to get parse token response from Rancher."
         exit 1
@@ -469,18 +479,19 @@ setup_kube_context() {
         RANCHER_CURRENT_CLUSTER=$(rancher context current | sed -n 's/.*Cluster:\([^ ]*\).*/\1/p')
         AVAILABLE_NAMESPACES=$(gum spin --show-error --title="Fetching namespaces you have access to..." -- rancher namespaces -q)
 
+        # shellcheck disable=SC2181
         if [[ "$?" -ne 0 ]]; then
             warn "There was an error communicating with the ${RANCHER_CURRENT_CLUSTER} cluster. Please select a different cluster and project."
             AVAILABLE_NAMESPACES=""
         else
-            AVAILABLE_NAMESPACES=$(echo "${AVAILABLE_NAMESPACES}" | sort | tr '\n' ' ')
+            AVAILABLE_NAMESPACES=$(echo "${AVAILABLE_NAMESPACES}" | sort)
 
             if [[ -z "${AVAILABLE_NAMESPACES}" ]]; then
                 warn "You don't seem to have access to any namespaces in the $(rancher context current) context. Please select a different cluster and project."
                 DEFAULT_NAMESPACE=""
             else
                 info "Select your default namespace:"
-                DEFAULT_NAMESPACE=$(gum choose --select-if-one --ordered ${AVAILABLE_NAMESPACES}) # Note, the variable is unquoted intentionally.
+                DEFAULT_NAMESPACE=$(echo "${AVAILABLE_NAMESPACES}" | gum choose --select-if-one --ordered)
 
                 if ! [[ "$DEFAULT_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
                     warn "The namespace you selected (${DEFAULT_NAMESPACE}) is not a valid Kubernetes namespace name. This should not happen, please let ADP know and select a differnt namespace."
@@ -495,37 +506,6 @@ setup_kube_context() {
 
     KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config use-context "${RANCHER_CURRENT_CLUSTER}" >/dev/null
 }
-
-ALL_BINARIES_AVAILABLE="true"
-for BINARY in curl tar awk sed grep git; do
-    if ! which "${BINARY}" &>/dev/null; then
-        error "❌ Error: ${BINARY} is required but not installed. Please contact ADP for assistance and let us know what operating system you're using."
-        ALL_BINARIES_AVAILABLE="false"
-    fi
-done
-
-if [[ "${ALL_BINARIES_AVAILABLE}" = "false" ]]; then
-    exit 1
-fi
-
-git check-ref-format --branch "${SCRIPT_SOURCE_BRANCH}" >/dev/null || exit 1
-
-if ! grep --help | grep -q 'extended-regexp'; then
-    error "❌ Error: Your version of grep does not support extended regular expressions. PPlease contact ADP for assistance and let us know what operating system you're using."
-    exit 1
-fi
-
-if ! bash -c 'help readarray' &>/dev/null; then
-    error "❌ Error: Your version of bash does not support readarray. Please contact ADP for assistance and let us know what operating system you're using."
-    exit 1
-fi
-
-if ! [[ -d "$HOME/.local/bin" ]]; then
-    if ! mkdir -p "${HOME}"/.local/bin 2>/dev/null; then
-        echo "❌ Error: Failed to create directory ${HOME}/.local/bin. Please check your permissions or available disk space."
-        exit 1
-    fi
-fi
 
 while getopts "udThIRAGDKSac:s:r:g:" arg; do
     case $arg in
@@ -571,6 +551,18 @@ while getopts "udThIRAGDKSac:s:r:g:" arg; do
     esac
 done
 
+ALL_BINARIES_AVAILABLE="true"
+for BINARY in curl tar awk sed grep git; do
+    if ! which "${BINARY}" &>/dev/null; then
+        error "❌ Error: ${BINARY} is required but not installed. Please contact ADP for assistance and let us know what operating system you're using."
+        ALL_BINARIES_AVAILABLE="false"
+    fi
+done
+
+if [[ "${ALL_BINARIES_AVAILABLE}" = "false" ]]; then
+    exit 1
+fi
+
 if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" != "true" ]]; then
     echo "Looks like you're running non-interactive, like from 'curl'."
     echo "Since this tool asks a lot of questions, it cannot be run this way. Installing to ${HOME}/.local/bin..."
@@ -611,6 +603,31 @@ adp-connect, use `adp-connect -h` for help.'
     exit 1
 fi
 
+if ! [ "${FORCE_CURRENT_SHELL}" = "true" ]; then
+    if which zsh &>/dev/null && ! [ -z "${BASH}" ]; then
+        exec zsh "$0" "$@"
+    fi
+fi
+
+if [ -n "${ZSH_NAME}" ]; then
+    debug "Running in ZSH!"
+elif [ -z "${BASH}" ]; then
+    warn "Running in an unknown shell. This script has only been tested in bash and zsh, you may run into issues."
+fi
+
+git check-ref-format --branch "${SCRIPT_SOURCE_BRANCH}" >/dev/null || exit 1
+
+if ! (grep --help 2>/dev/null | grep -q 'extended-regexp') && ! (which sw_vers >/dev/null && [ "$(sw_vers | grep ProductName | awk '{print $2}' | tr '[:upper:]' '[:lower:]')" = "macos" ]); then
+    error "❌ Error: Your version of grep does not support extended regular expressions. Please contact ADP for assistance and let us know what operating system you're using."
+    exit 1
+fi
+
+if ! [[ -d "$HOME/.local/bin" ]]; then
+    if ! mkdir -p "${HOME}"/.local/bin 2>/dev/null; then
+        echo "❌ Error: Failed to create directory ${HOME}/.local/bin. Please check your permissions or available disk space."
+        exit 1
+    fi
+fi
 
 if [[ -z "${ACCEPT_SUPPLY_CHAIN_SECURITY}" ]]; then
     if ! confirm "⚠️  This script will utilize a series of resources from \
@@ -755,15 +772,21 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             debug "Switching to Rancher server ${SERVER}..."
             rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
             for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
-                if [[ -z "${SKIP_KUBECONFIG}" ]]; then
-                    TEMP_KUBE_CONFIG=$(echo "${SERVER}-${CLUSTER}" | base64)
-                    gum spin --show-error --title="Fetching kubeconfig for cluster ${CLUSTER}..." -- rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
-                    KUBE_CONFIGS+=("${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml")
-                fi
-                KUBE_CLUSTER_VERSIONS+=("$(rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion')")
+            if [[ -z "${SKIP_KUBECONFIG}" ]]; then
+                TEMP_KUBE_CONFIG=$(echo "${SERVER}-${CLUSTER}" | base64)
+                gum spin --show-error --title="Fetching kubeconfig for cluster ${CLUSTER}..." -- rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
+                KUBE_CONFIGS+=("${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml")
+            fi
+            KUBE_CLUSTER_VERSIONS+=("$(rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion' | sed -E 's/^([vV]?[0-9]+\.[0-9]+\.[0-9]+).*/\1/')")
             done
         done
-        readarray -t KUBE_CLUSTER_VERSIONS < <(printf '%s\n' "${KUBE_CLUSTER_VERSIONS[@]}" | sort -u)
+
+        # Deduplicate and sort KUBE_CLUSTER_VERSIONS
+        KUBE_CLUSTER_VERSIONS_UNIQUE=()
+        while IFS= read -r line; do
+            KUBE_CLUSTER_VERSIONS_UNIQUE+=("$line")
+        done < <(printf '%s\n' "${KUBE_CLUSTER_VERSIONS[@]}" | sort -u)
+        KUBE_CLUSTER_VERSIONS=("${KUBE_CLUSTER_VERSIONS_UNIQUE[@]}")
 
         debug "Found the following Kubernetes versions: ${KUBE_CLUSTER_VERSIONS[*]}"
 
@@ -799,7 +822,6 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
 
         if [[ -f "$HOME/.kube/config.bak" ]]; then
             for CONTEXT in $(yq eval -o json -I=0 '.contexts[]' "$HOME/.kube/config.bak"); do
-                NAMESPACE=$(yq -r '.context.namespace' <<< "${CONTEXT}")
                 NAME=$(yq -r '.name' <<< "${CONTEXT}")
 
                 if [[ -z "$(yq -r '.contexts[] | select(.name == "'"${NAME}"'")' "$HOME/.kube/config" 2>/dev/null)" ]]; then
@@ -811,10 +833,11 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
         if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
             KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
 
-            CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'$(kubectl config current-context)'")].context.namespace}')
-            CURRENT_CLUSTER_URL=$(kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'$(kubectl config current-context)'")].cluster.server}')
+            CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'"$(kubectl config current-context)"'")].context.namespace}')
+            CURRENT_CLUSTER_URL=$(kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'"$(kubectl config current-context)"'")].cluster.server}')
+            # shellcheck disable=SC2001
             CURRENT_RANCHER_SERVER_URL=$(echo "${CURRENT_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
-            CURRENT_RANCHER_SERVER_NAME=$(rancher server ls |  sed 's/^*//g' | grep -v CURRENT | awk '{ print $1 }' | grep "^${CURRENT_RANCHER_SERVER_URL}$")
+            CURRENT_RANCHER_SERVER_NAME=$(rancher server ls | sed 's/^*//g' | grep -v CURRENT | grep "${CURRENT_RANCHER_SERVER_URL}" | awk '{ print $1 }')
 
             debug "Current namespace: ${CURRENT_NAMESPACE}"
             debug "Current cluster URL: ${CURRENT_CLUSTER_URL}"
@@ -834,10 +857,11 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             setup_kube_context
         fi
 
-        NEW_NAMESPACE=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)'")].context.namespace}')
-        NEW_CLUSTER_URL=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)'")].cluster.server}')
+        NEW_NAMESPACE=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'"$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)"'")].context.namespace}')
+        NEW_CLUSTER_URL=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'"$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)"'")].cluster.server}')
+        # shellcheck disable=SC2001
         NEW_RANCHER_SERVER_URL=$(echo "${NEW_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
-        NEW_RANCHER_SERVER_NAME=$(rancher server ls |  sed 's/^*//g' | grep -v CURRENT | awk '{ print $2 }' | grep "^${NEW_RANCHER_SERVER_URL}$")
+        NEW_RANCHER_SERVER_NAME=$(rancher server ls |  sed 's/^*//g' | grep -v CURRENT | grep "${NEW_RANCHER_SERVER_URL}" | awk '{ print $1 }')
 
         if [[ -z "${NEW_NAMESPACE}" ]] && [[ -n "${CURRENT_NAMESPACE}" ]]; then
             debug "New kubeconfig doesn't have a namespace set on the current context, this is likely a weirdness from merging. Reusing the old namespace."
