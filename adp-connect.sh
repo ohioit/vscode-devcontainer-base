@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-HAVE_GUM="$(which gum &>/dev/null && echo 'true')"
+#HAVE_GUM="$(which gum &>/dev/null && echo 'true')"
 TEMP_DIR=$(mktemp -d)
 SCRIPT_SOURCE_BRANCH="${SCRIPT_SOURCE_BRANCH:-main}"
 SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/ohioit/vscode-devcontainer-base/refs/heads/${SCRIPT_SOURCE_BRANCH}/adp-connect.sh"
@@ -118,9 +118,25 @@ confirm() {
     if [[ "${HAVE_GUM}" ]]; then
         gum confirm --default=No "$1"
     else
-        echo -n "$1 [y/N] "
-        read -n 1
-        echo
+        REPLY=""
+
+        while true; do
+            echo -n "$1 [y/N] "
+            # shellcheck disable=SC2162
+            read REPLY
+            echo
+
+            if [[ -z "${REPLY}" ]]; then
+                REPLY="Y"
+            fi
+
+            if [[ "${REPLY}" =~ ^[YyNn]$ ]]; then
+                break
+            fi
+
+            echo "${REPLY} is not valid, please enter Y or N"
+        done
+
         [[ $REPLY =~ ^[Yy]$ ]]
     fi
 }
