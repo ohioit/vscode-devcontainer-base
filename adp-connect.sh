@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-HAVE_GUM="$(which gum 2>/dev/null && 'true')"
+HAVE_GUM="$(which gum &>/dev/null && echo 'true')"
 TEMP_DIR=$(mktemp -d)
 SCRIPT_SOURCE_BRANCH="${SCRIPT_SOURCE_BRANCH:-main}"
 SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/ohioit/vscode-devcontainer-base/refs/heads/${SCRIPT_SOURCE_BRANCH}/adp-connect.sh"
@@ -116,9 +116,10 @@ error() {
 
 confirm() {
     if [[ "${HAVE_GUM}" ]]; then
-        gum confirm --default=No "$1" < /dev/tty
+        gum confirm --default=No "$1"
     else
-        read -p "$1 [y/N] " -n 1 -r  < /dev/tty
+        echo -n "$1 [y/N] "
+        read -n 1 -r
         echo
         [[ $REPLY =~ ^[Yy]$ ]]
     fi
