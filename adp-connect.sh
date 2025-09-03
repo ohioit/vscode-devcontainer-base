@@ -119,7 +119,7 @@ confirm() {
         gum confirm --default=No "$1"
     else
         echo -n "$1 [y/N] "
-        read -n 1 -r
+        read -n 1
         echo
         [[ $REPLY =~ ^[Yy]$ ]]
     fi
