@@ -668,7 +668,7 @@ fi
 if should_install "gum"; then
     download_latest_release "charmbracelet/gum" "gum" "tar.gz" || exit 1
     extract_download "gum" "tar.gz" || exit 1
-    install --mode=0755 "${TEMP_DIR}/gum"*/"gum" "$HOME/.local/bin/gum" || exit 1
+    install -m "0755" "${TEMP_DIR}/gum"*/"gum" "$HOME/.local/bin/gum" || exit 1
     info "🎉 Successfully installed gum!"
 
     HAVE_GUM="true"
@@ -678,7 +678,7 @@ fi
 # JSON and YAML. One tool, no interperters needed.
 if should_install "yq"; then
     INSANE_CHECKSUMS="true" download_latest_release "mikefarah/yq" "yq" || exit 1
-    install --mode=0755 "${TEMP_DIR}/yq" "$HOME/.local/bin/yq" || exit 1
+    install -m "0755" "${TEMP_DIR}/yq" "$HOME/.local/bin/yq" || exit 1
     info "🎉 Successfully installed yq!"
 elif ! yq --version | grep -q mikefarah; then
     error "🚨 You have a version of 'yq' installed that is incompatible with this script."
@@ -703,7 +703,7 @@ fi
 if [[ "${INSTALL_RANCHER}" = "0" ]]; then
     download_latest_release "rancher/cli" "rancher" "tar.gz" || exit 1
     extract_download "rancher" "tar.gz" || exit 1
-    install --mode=0755 "${TEMP_DIR}/rancher"*/"rancher" "$HOME/.local/bin/rancher" || exit 1
+    install -m "0755" "${TEMP_DIR}/rancher"*/"rancher" "$HOME/.local/bin/rancher" || exit 1
     info "🎉 Successfully installed rancher CLI!"
 fi
 
@@ -928,7 +928,7 @@ fi
 if should_install "kubeseal"; then
     download_latest_release "bitnami-labs/sealed-secrets" "kubeseal" "tar.gz" || exit 1
     extract_download "kubeseal" "tar.gz" || exit 1
-    install --mode=0755 "${TEMP_DIR}/kubeseal" "$HOME/.local/bin/kubeseal" || exit 1
+    install -m "0755" "${TEMP_DIR}/kubeseal" "$HOME/.local/bin/kubeseal" || exit 1
     info "🎉 Successfully installed kubeseal!"
 fi
 
@@ -976,13 +976,13 @@ fi
 if should_install "k9s"; then
     download_latest_release "derailed/k9s" "k9s" "tar.gz" || exit 1
     extract_download "k9s" "tar.gz" || exit 1
-    install --mode=0755 "${TEMP_DIR}/k9s" "$HOME/.local/bin/k9s" || exit 1
+    install -m "0755" "${TEMP_DIR}/k9s" "$HOME/.local/bin/k9s" || exit 1
     info "🎉 Successfully installed k9s!"
 fi
 
 if should_install "skaffold"; then
     download_latest_release "GoogleContainerTools/skaffold" "skaffold" || exit 1
-    install --mode=0755 "${TEMP_DIR}/skaffold" "$HOME/.local/bin/skaffold" || exit 1
+    install -m "0755" "${TEMP_DIR}/skaffold" "$HOME/.local/bin/skaffold" || exit 1
     info "🎉 Successfully installed skaffold!"
 fi
 
@@ -990,7 +990,7 @@ if should_install "gh"; then
     download_latest_release "cli/cli" "gh" "tar.gz" || exit 1
     extract_download "gh" "tar.gz" || exit 1
     mv "${TEMP_DIR}"/gh_* "${TEMP_DIR}/gh"
-    install --mode=0755 "${TEMP_DIR}/gh/bin/gh" "$HOME/.local/bin/gh" || exit 1
+    install -m "0755" "${TEMP_DIR}/gh/bin/gh" "$HOME/.local/bin/gh" || exit 1
     info "🎉 Successfully installed gh!"
 fi
 
@@ -1102,7 +1102,7 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
 
     if should_install "argocd"; then
         download_latest_release "argoproj/argo-cd" "argocd" || exit 1
-        install --mode=0755 "${TEMP_DIR}/argocd" "$HOME/.local/bin/argocd" || exit 1
+        install -m "0755" "${TEMP_DIR}/argocd" "$HOME/.local/bin/argocd" || exit 1
         info "🎉 Successfully installed ArgoCD!"
     fi
 
