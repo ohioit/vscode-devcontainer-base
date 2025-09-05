@@ -21,21 +21,14 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v3
-        - name: Log in to the Container registry
-          uses: docker/login-action@v3.3.0
+        - name: Kaniko build
+          uses: aevea/action-kaniko@master
           with:
             registry: ghcr.io
-            username: ${{ github.actor }}
             password: ${{ secrets.GITHUB_TOKEN }}
-        - name: Build necessary docker images
-          uses: hiberbee/github-action-skaffold@1.27.0
-          with:
-            skaffold-version: 1.39.1
-            container-structure-test-version: 1.11.0
-            command: build
-            push: true
+            tag: ${{ env.DOCKER_IMAGE_TAG }}
             cache: true
-            tag: latest
+            cache_registry: cache
 
     build-and-push-branch:
       if: startsWith(github.ref, 'refs/heads/cs/')
@@ -46,19 +39,14 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v3
-        - uses: docker/metadata-action@v3
-          id: metadata
-          with:
-            images: ghcr.io/${{ github.repository }}
         - name: Determine tag name from branch name
           env:
             BRANCH_NAME: "${{ github.event.pull_request.head.ref }}"
           run: |
-            echo "::set-output name=DOCKER_IMAGE_TAG::$(${BRANCH_NAME} | cut -d '/' -f 2)"
+            echo "DOCKER_IMAGE_TAG::$($BRANCH_NAME | cut -d '/' -f 2)" >> $GITHUB_OUTPUT
         - name: Kaniko build
           uses: aevea/action-kaniko@master
           with:
-            image: vscode-devcontainer-base
             registry: ghcr.io
             password: ${{ secrets.GITHUB_TOKEN }}
             tag: ${{ env.DOCKER_IMAGE_TAG }}
@@ -74,25 +62,26 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v3
-        - name: Log in to the Container registry
-          uses: docker/login-action@v3
+        - name: Determine tag name from branch name
+          env:
+            TAG_NAME: "${{ github.event.pull_request.head.ref }}"
+          run: |
+            echo "DOCKER_IMAGE_TAG::$($TAG_NAME | cut -d '/' -f 3)" >> $GITHUB_OUTPUT
+        - name: Kaniko build
+          uses: aevea/action-kaniko@master
           with:
             registry: ghcr.io
-            username: ${{ github.actor }}
             password: ${{ secrets.GITHUB_TOKEN }}
-        - name: Build necessary docker images
-          uses: hiberbee/github-action-skaffold@1.27.0
-          with:
-            skaffold-version: 1.39.1
-            container-structure-test-version: 1.11.0
-            command: build
-            push: true
+            tag: ${{ env.DOCKER_IMAGE_TAG }}
             cache: true
-            tag: ${{ github.ref_name }}
+            cache_registry: cache
 
     delete-merged-docker-tags:
       if: ${{ github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'cs/') }}
       runs-on: ohioit
+      permissions:
+        contents: read
+        packages: write
       steps:
         - name: Determine tag name from branch name
           env:
@@ -106,7 +95,6 @@ jobs:
           run: |
             TAG="${IMAGE_TAG}"
             REPO=ohioit/vscode-devcontainer-base
-            IMAGE=vscode-devcontainer-base
             curl -X DELETE \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://ghcr.io/v2/${REPO}/${IMAGE}/manifests/${TAG}"
+              "https://ghcr.io/v2/${REPO}/manifests/${TAG}"
