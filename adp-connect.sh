@@ -978,13 +978,6 @@ if should_install "helm"; then
     info "🎉 Successfully installed Helm!"
 fi
 
-if should_install "k9s"; then
-    download_latest_release "derailed/k9s" "k9s" "tar.gz" || exit 1
-    extract_download "k9s" "tar.gz" || exit 1
-    install -m "0755" "${TEMP_DIR}/k9s" "$HOME/.local/bin/k9s" || exit 1
-    info "🎉 Successfully installed k9s!"
-fi
-
 if should_install "skaffold"; then
     download_latest_release "GoogleContainerTools/skaffold" "skaffold" || exit 1
     install -m "0755" "${TEMP_DIR}/skaffold" "$HOME/.local/bin/skaffold" || exit 1
