@@ -39,15 +39,11 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v3
-        - uses: docker/metadata-action@v3
-          id: metadata
-          with:
-            images: ghcr.io/${{ github.repository }}
         - name: Determine tag name from branch name
           env:
             BRANCH_NAME: "${{ github.event.pull_request.head.ref }}"
           run: |
-            echo "DOCKER_IMAGE_TAG::$(${BRANCH_NAME} | cut -d '/' -f 2)" >> $GITHUB_OUTPUT
+            echo "DOCKER_IMAGE_TAG::$($BRANCH_NAME | cut -d '/' -f 2)" >> $GITHUB_OUTPUT
         - name: Kaniko build
           uses: aevea/action-kaniko@master
           with:
@@ -66,15 +62,11 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v3
-        - uses: docker/metadata-action@v3
-          id: metadata
-          with:
-            images: ghcr.io/${{ github.repository }}
         - name: Determine tag name from branch name
           env:
             TAG_NAME: "${{ github.event.pull_request.head.ref }}"
           run: |
-            echo "DOCKER_IMAGE_TAG::$(${TAG_NAME} | cut -d '/' -f 3)" >> $GITHUB_OUTPUT
+            echo "DOCKER_IMAGE_TAG::$($TAG_NAME | cut -d '/' -f 3)" >> $GITHUB_OUTPUT
         - name: Kaniko build
           uses: aevea/action-kaniko@master
           with:
