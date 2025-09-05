@@ -24,7 +24,6 @@ jobs:
         - name: Kaniko build
           uses: aevea/action-kaniko@master
           with:
-            image: vscode-devcontainer-base
             registry: ghcr.io
             password: ${{ secrets.GITHUB_TOKEN }}
             tag: ${{ env.DOCKER_IMAGE_TAG }}
@@ -48,7 +47,7 @@ jobs:
           env:
             BRANCH_NAME: "${{ github.event.pull_request.head.ref }}"
           run: |
-            echo "::set-output name=DOCKER_IMAGE_TAG::$(${BRANCH_NAME} | cut -d '/' -f 2)"
+            echo "DOCKER_IMAGE_TAG::$(${BRANCH_NAME} | cut -d '/' -f 2)" >> $GITHUB_OUTPUT
         - name: Kaniko build
           uses: aevea/action-kaniko@master
           with:
@@ -75,7 +74,7 @@ jobs:
           env:
             TAG_NAME: "${{ github.event.pull_request.head.ref }}"
           run: |
-            echo "::set-output name=DOCKER_IMAGE_TAG::$(${TAG_NAME} | cut -d '/' -f 3)"
+            echo "DOCKER_IMAGE_TAG::$(${TAG_NAME} | cut -d '/' -f 3)" >> $GITHUB_OUTPUT
         - name: Kaniko build
           uses: aevea/action-kaniko@master
           with:
