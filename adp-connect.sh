@@ -236,9 +236,11 @@ download_latest_release() {
 
     for arch in "${LOCAL_ARCH[@]}"; do
         if [[ -n "$format" ]]; then
+            debug "Searching for $format package..."
             binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?(\.|$format)\"" | cut -d '"' -f 4)
         else
-            binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?" | cut -d '"' -f 4)
+            debug "Searching for uncompressed binary..."
+            binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?\"" | cut -d '"' -f 4)
         fi
 
         if [[ -n "$binary_url" ]]; then
