@@ -804,6 +804,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
             if [[ -z "${SKIP_KUBECONFIG}" ]]; then
                 TEMP_KUBE_CONFIG=$(echo "${SERVER}-${CLUSTER}" | base64)
+                debug "Fetching kubeconfig for cluster ${CLUSTER} on server ${SERVER}..."
                 gum spin --show-error --title="Fetching kubeconfig for cluster ${CLUSTER}..." -- rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
                 KUBE_CONFIGS+=("${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml")
             fi
