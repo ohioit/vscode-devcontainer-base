@@ -27,6 +27,7 @@ USER_OHIOID=""
 ARTIFACTORY_TOKEN=""
 
 HTTP_DATA_METHODS=("POST" "PUT" "PATCH")
+MAIN_SCRIPT_PID="${BASHPID:-$$}"
 
 if [[ "${FORCE_TRACE_MODE}" = "true" ]]; then
     set -x
@@ -35,11 +36,16 @@ fi
 cleanup() {
     rm -rf "$TEMP_DIR"
     rm -rf "${HOME}/.kube/config.incomplete"
-
-    exit
 }
 
-trap cleanup EXIT INT
+on_interrupt() {
+    cleanup
+    trap - EXIT INT TERM
+    exit 130
+}
+
+trap cleanup EXIT
+trap on_interrupt INT TERM
 
 # Determine the operating system and architecture
 LOCAL_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -64,6 +70,25 @@ log() {
     else
         echo -e "$1"
     fi
+}
+
+gum() {
+    command gum "$@"
+    local rc=$?
+
+    # Ctrl+C from gum prompts should terminate this script.
+    if [[ ${rc} -eq 130 ]]; then
+        # If we're in a subshell (for example command substitution), signal
+        # the main script process so it exits too.
+        if [[ ${BASH_SUBSHELL:-0} -gt 0 ]] || [[ ${ZSH_SUBSHELL:-0} -gt 0 ]]; then
+            kill -INT "${MAIN_SCRIPT_PID}" 2>/dev/null
+            return ${rc}
+        fi
+
+        on_interrupt
+    fi
+
+    return ${rc}
 }
 
 debug() {
@@ -92,9 +117,9 @@ instruction() {
                 --align=center \
                 --width=70 \
                 --margin="1 2" \
-                --padding="2 4 " "$1"
+                --padding="2 4 " "$1" >&2
     else
-        echo -e "\e[35mℹ️ $1\e[0m"
+        echo -e "\e[35mℹ️ $1\e[0m" >&2
     fi
 }
 
@@ -147,33 +172,68 @@ get_ohioid() {
 }
 
 get_artifactory_token() {
-    instruction "🐳 It's time to login to Artifactory. Go to https://artifactory.oit.ohio.edu
- and login. Once you've logged in, click on your username in the top right and select:
- → Edit Profile → Generate an API Key (not an Identity Token) → Copy the API Key and paste it here."
-    gum input --width=80 --placeholder="Artifactory Token"
+    local artifactory_info
+    artifactory_info=$(cat <<-'EOF'
+	🐳 It's time to login to Artifactory.
 
-    echo "${ARTIFACTORY_TOKEN}"
+    Go to https://artifactory.oit.ohio.edu and login. Once you've logged in,
+    click on your username in the top right and select:
+
+	→ Edit Profile
+    → Generate an API Key (not an Identity Token) if one doesn't already exist.
+    → Copy the API Key and paste it here (click the icon next to the field to copy it).
+EOF
+    )
+
+    instruction "${artifactory_info}"
+    gum input --password --width=80 --placeholder="Artifactory Token"
+
+    echo "${ARTIFACTORY_TOKEN}" | tr -d '[:space:]'
 }
 
 compare_versions() {
-    # Remove leading 'v' if present
+    # Remove leading 'v'/'V' if present and compare numerically.
     local ver1="${1#v}"
     local ver2="${2#v}"
+    ver1="${ver1#V}"
+    ver2="${ver2#V}"
 
-    local IFS='.'
-    # shellcheck disable=SC2206
-    local ver1_arr=($ver1)
-    # shellcheck disable=SC2206
-    local ver2_arr=($ver2)
+    local ver1_major ver1_minor ver1_patch
+    local ver2_major ver2_minor ver2_patch
 
-    local i
-    for ((i=0; i<${#ver1_arr[@]}; i++)); do
-        if [[ ${ver1_arr[i]} -gt ${ver2_arr[i]:-0} ]]; then
-            return 1
-        elif [[ ${ver1_arr[i]} -lt ${ver2_arr[i]:-0} ]]; then
-            return 2
-        fi
-    done
+    ver1_major=$(echo "${ver1}" | cut -d. -f1)
+    ver1_minor=$(echo "${ver1}" | cut -d. -f2)
+    ver1_patch=$(echo "${ver1}" | cut -d. -f3)
+
+    ver2_major=$(echo "${ver2}" | cut -d. -f1)
+    ver2_minor=$(echo "${ver2}" | cut -d. -f2)
+    ver2_patch=$(echo "${ver2}" | cut -d. -f3)
+
+    # Treat missing segments as 0.
+    ver1_major="${ver1_major:-0}"
+    ver1_minor="${ver1_minor:-0}"
+    ver1_patch="${ver1_patch:-0}"
+    ver2_major="${ver2_major:-0}"
+    ver2_minor="${ver2_minor:-0}"
+    ver2_patch="${ver2_patch:-0}"
+
+    if (( 10#${ver1_major} > 10#${ver2_major} )); then
+        return 1
+    elif (( 10#${ver1_major} < 10#${ver2_major} )); then
+        return 2
+    fi
+
+    if (( 10#${ver1_minor} > 10#${ver2_minor} )); then
+        return 1
+    elif (( 10#${ver1_minor} < 10#${ver2_minor} )); then
+        return 2
+    fi
+
+    if (( 10#${ver1_patch} > 10#${ver2_patch} )); then
+        return 1
+    elif (( 10#${ver1_patch} < 10#${ver2_patch} )); then
+        return 2
+    fi
 
     return 0
 }
@@ -349,6 +409,20 @@ should_install() {
     fi
 
     return 0
+}
+
+is_in_array() {
+    local needle="$1"
+    shift
+
+    local item
+    for item in "$@"; do
+        if [[ "$item" == "$needle" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 rancher_current_server() {
@@ -566,7 +640,9 @@ while getopts "udThIRAGDKSac:s:r:g:" arg; do
         u) FORCE_UPDATE="true" ;;
         I) ACCEPT_SUPPLY_CHAIN_SECURITY="true" ;;
         R) FORCE_ADD_MORE_RANCHERS="true" ;;
-        A) FORCE_ADD_MORE_ARGOCD="true" ;;
+        A) FORCE_ADD_MORE_ARGOCD="true"
+           SETUP_INTERNAL_SERVICES="true"
+           ;;
         G) FORCE_ADD_MORE_GITHUB="true" ;;
         K) SKIP_KUBECONFIG="true" ;;
         a) SETUP_INTERNAL_SERVICES="true" ;;
@@ -770,23 +846,32 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
     done
 
     info "Validating all Rancher servers..."
+    REACHABLE_RANCHER_SERVERS=()
+    UNREACHABLE_RANCHER_SERVERS=()
     for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
-        rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
-
         curl -s --connect-timeout 5 --max-time 10 "https://${SERVER}/ping" > /dev/null 2>&1
         CURL_EXIT=$?
         if [[ $CURL_EXIT -eq 6 ]] || [[ $CURL_EXIT -eq 7 ]] || [[ $CURL_EXIT -eq 28 ]] || [[ $CURL_EXIT -eq 35 ]]; then
             warn "⚠️  Warning: Unable to reach Rancher server ${SERVER} (connection, timeout, or TLS error). Skipping."
+            UNREACHABLE_RANCHER_SERVERS+=("${SERVER}")
             continue
         fi
+
+        rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
 
         if ! gum spin --show-error --title="Checking ${SERVER}..." rancher project list; then
             yq -i '.Servers["'"${SERVER}"'"].project = ""' "$HOME/.rancher/cli2.json"
             rancher_login "${SERVER}"
         fi
+
+        REACHABLE_RANCHER_SERVERS+=("${SERVER}")
     done
 
-    info "🎉 All Rancher servers are configured and validated!"
+    if [[ ${#UNREACHABLE_RANCHER_SERVERS[@]} -gt 0 ]]; then
+        warn "Skipping unreachable Rancher servers for remaining setup: ${UNREACHABLE_RANCHER_SERVERS[*]}"
+    fi
+
+    info "🎉 Rancher servers are configured and validated!"
 
     if [[ -z "${SKIP_KUBECONFIG}" ]]; then
         info "Generating/updating kubeconfig (this will take some time)..."
@@ -805,7 +890,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
         debug "Current kubeconfig context: ${KUBE_CURRENT_CONTEXT}"
 
         KUBE_CLUSTER_VERSIONS=()
-        for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
+        for SERVER in "${REACHABLE_RANCHER_SERVERS[@]}"; do
             debug "Switching to Rancher server ${SERVER}..."
             rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
             for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
@@ -819,6 +904,12 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             done
         done
 
+        if [[ ${#REACHABLE_RANCHER_SERVERS[@]} -eq 0 ]]; then
+            warn "No reachable Rancher servers are available. Skipping kubeconfig and kubectl version setup."
+        elif [[ ${#KUBE_CLUSTER_VERSIONS[@]} -eq 0 ]]; then
+            warn "No cluster version data found from reachable Rancher servers. Skipping kubeconfig and kubectl version setup."
+        else
+
         # Deduplicate and sort KUBE_CLUSTER_VERSIONS
         KUBE_CLUSTER_VERSIONS_UNIQUE=()
         while IFS= read -r line; do
@@ -830,23 +921,57 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
 
         KUBE_LATEST_VERSION=$(version_sort "${KUBE_CLUSTER_VERSIONS[@]}" | tail -n 1)
         KUBE_OLDEST_VERSION=$(version_sort "${KUBE_CLUSTER_VERSIONS[@]}" | head -n 1)
+        KUBE_TARGET_VERSION="${KUBE_LATEST_VERSION}"
 
         debug "Latest Kubernetes version: ${KUBE_LATEST_VERSION}"
         debug "Oldest Kubernetes version: ${KUBE_OLDEST_VERSION}"
 
-        info "Validating Kubectl connectivity. Note, Rancher may ask you to login again."
+        KUBE_LATEST_MAJOR=$(echo "${KUBE_LATEST_VERSION}" | cut -d. -f1)
+        KUBE_LATEST_MINOR=$(echo "${KUBE_LATEST_VERSION}" | cut -d. -f2)
+        KUBE_OLDEST_MAJOR=$(echo "${KUBE_OLDEST_VERSION}" | cut -d. -f1)
+        KUBE_OLDEST_MINOR=$(echo "${KUBE_OLDEST_VERSION}" | cut -d. -f2)
+
+        if [[ "${KUBE_LATEST_MAJOR}" != "${KUBE_OLDEST_MAJOR}" ]] || (( 10#${KUBE_LATEST_MINOR} > 10#${KUBE_OLDEST_MINOR} + 1 )); then
+            KUBE_ALLOWED_MINOR=$((10#${KUBE_OLDEST_MINOR} + 1))
+            KUBE_TARGET_VERSION=$(printf '%s\n' "${KUBE_CLUSTER_VERSIONS[@]}" | awk -F. -v major="${KUBE_OLDEST_MAJOR}" -v minor="${KUBE_ALLOWED_MINOR}" '$1 == major && $2 == minor {print $0}' | version_sort | tail -n 1)
+
+            if [[ -z "${KUBE_TARGET_VERSION}" ]]; then
+                KUBE_TARGET_VERSION="${KUBE_OLDEST_MAJOR}.${KUBE_ALLOWED_MINOR}.0"
+            fi
+
+            warn "Newest cluster version ${KUBE_LATEST_VERSION} is more than one minor newer than oldest ${KUBE_OLDEST_VERSION}. Capping kubectl target to ${KUBE_TARGET_VERSION}."
+        fi
+
+        debug "Kubectl target version: ${KUBE_TARGET_VERSION}"
+
+        info "Validating kubectl version target (${KUBE_TARGET_VERSION}) based on reachable cluster versions (${KUBE_OLDEST_VERSION} to ${KUBE_LATEST_VERSION})."
 
         if should_install "kubectl"; then
-            install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
+            install_kubectl "${KUBE_TARGET_VERSION}" || exit 1
         else
+            KUBECTL_CLIENT_VERSION=$(kubectl version --client -o yaml 2>/dev/null | yq -r '.clientVersion.gitVersion' | sed -E 's/^([vV]?[0-9]+\.[0-9]+\.[0-9]+).*/\1/')
             if [[ "$(which kubectl)" != "$HOME/.local/bin/kubectl" ]]; then
                 warn "🚨 kubectl is already installed but managed by a different tool. Proceeding with your existing kubectl."
-                gum spin --show-error --title "Validating kubectl version..." -- rancher kubectl version >/dev/null
+                if [[ -n "${KUBECTL_CLIENT_VERSION}" ]]; then
+                    compare_versions "${KUBECTL_CLIENT_VERSION}" "${KUBE_TARGET_VERSION}"
+                    if [[ "$?" = "2" ]]; then
+                        warn "Your kubectl version (${KUBECTL_CLIENT_VERSION}) is older than the target version (${KUBE_TARGET_VERSION})."
+                    fi
+                fi
             else
-                RANCHER_KUBECTL_VERSION=$(gum spin --title="Validating kubectl version..." -- rancher kubectl version)
-                if echo "${RANCHER_KUBECTL_VERSION}" | grep -qi "version difference"; then
-                    info "🔍 Found a large version difference between kubectl and the clusters. Upgrading kubectl..."
-                    install_kubectl "${KUBE_LATEST_VERSION}" || exit 1
+                if [[ -z "${KUBECTL_CLIENT_VERSION}" ]]; then
+                    warn "Could not determine local kubectl version. Proceeding without kubectl upgrade validation."
+                else
+                    compare_versions "${KUBECTL_CLIENT_VERSION}" "${KUBE_TARGET_VERSION}"
+                    COMPARE_RESULT="$?"
+                    if [[ "${COMPARE_RESULT}" = "2" ]]; then
+                        info "🔍 kubectl (${KUBECTL_CLIENT_VERSION}) is older than target (${KUBE_TARGET_VERSION}). Upgrading kubectl..."
+                        install_kubectl "${KUBE_TARGET_VERSION}" || exit 1
+                    elif [[ "${COMPARE_RESULT}" = "1" ]]; then
+                        debug "kubectl (${KUBECTL_CLIENT_VERSION}) is newer than the target (${KUBE_TARGET_VERSION})."
+                    else
+                        debug "kubectl (${KUBECTL_CLIENT_VERSION}) matches the target version (${KUBE_TARGET_VERSION})."
+                    fi
                 fi
             fi
         fi
@@ -922,14 +1047,19 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             exit 1
         fi
 
-        rancher server switch "${NEW_RANCHER_SERVER_NAME}" 2> >(grep -v "Saving config" >&2) >/dev/null
-        rancher context switch "$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl get namespace "${NEW_NAMESPACE}" -o yaml | yq -r '.metadata.annotations."field.cattle.io/projectId"')" 2> >(grep -v "Saving config" >&2) >/dev/null
+        if is_in_array "${NEW_RANCHER_SERVER_NAME}" "${REACHABLE_RANCHER_SERVERS[@]}"; then
+            rancher server switch "${NEW_RANCHER_SERVER_NAME}" 2> >(grep -v "Saving config" >&2) >/dev/null
+            rancher context switch "$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl get namespace "${NEW_NAMESPACE}" -o yaml | yq -r '.metadata.annotations."field.cattle.io/projectId"')" 2> >(grep -v "Saving config" >&2) >/dev/null
+        else
+            warn "Skipping Rancher context switch because ${NEW_RANCHER_SERVER_NAME} is unreachable."
+        fi
 
         mv "$HOME/.kube/config.incomplete" "$HOME/.kube/config"
 
         info "🎉 You now have access to $(yq '.contexts | length' ~/.kube/config) Kubernetes contexts!"
         info "Your default context is $(kubectl config current-context)."
         info "You'll be using the namespace $(kubectl config view --minify --output 'jsonpath={..namespace}') by default."
+        fi
     fi
 
 
@@ -1174,23 +1304,31 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
         fi
 
         if ! helm search repo artifactory --fail-on-no-result -o yaml &>/dev/null; then
+            info "Adding Artifactory helm repository..."
+            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+            [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+
             if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
-                info "Adding Artifactory helm repository..."
-                [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-                [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
                 helm repo add artifactory https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+            else
+                warn "Skipping adding Artifactory helm repository. You'll need to add it manually or rerun this script."
             fi
         else
             info "🎉 You're already authenticated to the Artifactory helm repository!"
+
         fi
 
         if ! helm search repo artifactory-push --fail-on-no-result -o yaml &>/dev/null; then
+            info "Adding Artifactory helm repository with push access..."
+            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+            [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+
             if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
-                info "Adding Artifactory helm repository with push access..."
-                [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-                [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
                 helm repo add artifactory-push https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+            else
+                warn "Skipping adding Artifactory helm repository with push access. You'll need to add it manually or rerun this script."
             fi
+
         else
             info "🎉 You're already authenticated to the Artifactory helm repository with push access!"
         fi
