@@ -773,6 +773,13 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
     for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
         rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
 
+        curl -s --connect-timeout 5 --max-time 10 "https://${SERVER}/ping" > /dev/null 2>&1
+        CURL_EXIT=$?
+        if [[ $CURL_EXIT -eq 6 ]] || [[ $CURL_EXIT -eq 7 ]] || [[ $CURL_EXIT -eq 28 ]] || [[ $CURL_EXIT -eq 35 ]]; then
+            warn "⚠️  Warning: Unable to reach Rancher server ${SERVER} (connection, timeout, or TLS error). Skipping."
+            continue
+        fi
+
         if ! gum spin --show-error --title="Checking ${SERVER}..." rancher project list; then
             yq -i '.Servers["'"${SERVER}"'"].project = ""' "$HOME/.rancher/cli2.json"
             rancher_login "${SERVER}"
