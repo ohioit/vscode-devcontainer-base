@@ -1,3 +1,3 @@
 #!/bin/bash
-trap TERM exit 0
+trap "exit 0" TERM
 sleep infinity
