@@ -10,7 +10,7 @@ ARG LANGUAGE=en_US.UTF-8
 ARG LC_ALL=en_US.UTF-8
 
 # Versions for apt installation, see below for more versions.
-ARG MONGOCLI_VERSION=2.0.7
+ARG MONGOSH_VERSION=2.8.3
 
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
@@ -43,11 +43,10 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         rsync \
         nmap \
         less && \
-    MONGOCLI_ARCHITECTURE="$(dpkg --print-architecture)" && \
-    if [ "${MONGOCLI_ARCHITECTURE}" = "amd64" ]; then MONGOCLI_ARCHITECTURE=x86_64; fi && \
+    MONGOSH_ARCHITECTURE="$(dpkg --print-architecture)" && \
     mkdir -p /tmp/ohio-pkgs && \
-    curl -Lo /tmp/ohio-pkgs/mongocli.deb https://github.com/mongodb/mongodb-cli/releases/download/mongocli%2Fv"${MONGOCLI_VERSION}"/mongocli_"${MONGOCLI_VERSION}"_linux_"${MONGOCLI_ARCHITECTURE}".deb && \
-    apt-get install -y /tmp/ohio-pkgs/mongocli.deb && \
+    curl -Lo /tmp/ohio-pkgs/mongosh.deb https://github.com/mongodb-js/mongosh/releases/download/v"${MONGOSH_VERSION}"/mongodb-mongosh_"${MONGOSH_VERSION}"_"${MONGOSH_ARCHITECTURE}".deb && \
+    apt-get install -y /tmp/ohio-pkgs/mongosh.deb && \
     rm -Rf /tmp/ohio-pkgs && \
     sed -i '/'${LANG}'/s/^# //g' /etc/locale.gen && \
     locale-gen && \
