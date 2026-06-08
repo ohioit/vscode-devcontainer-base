@@ -9,6 +9,9 @@ ARG LANG=en_US.UTF-8
 ARG LANGUAGE=en_US.UTF-8
 ARG LC_ALL=en_US.UTF-8
 
+# Versions for apt installation, see below for more versions.
+ARG MONGOCLI_VERSION=2.0.7
+
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
     apt-get -y dist-upgrade && \
@@ -40,9 +43,15 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         rsync \
         nmap \
         less && \
+    MONGOCLI_ARCHITECTURE="$(dpkg --print-architecture)" && \
+    if [ "${MONGOCLI_ARCHITECTURE}" = "amd64" ]; then MONGOCLI_ARCHITECTURE=x86_64; fi && \
+    mkdir -p /tmp/ohio-pkgs && \
+    curl -Lo /tmp/ohio-pkgs/mongocli.deb https://github.com/mongodb/mongodb-cli/releases/download/mongocli%2Fv"${MONGOCLI_VERSION}"/mongocli_"${MONGOCLI_VERSION}"_linux_"${MONGOCLI_ARCHITECTURE}".deb && \
+    apt-get install -y /tmp/ohio-pkgs/mongocli.deb && \
+    rm -Rf /tmp/ohio-pkgs && \
     sed -i '/'${LANG}'/s/^# //g' /etc/locale.gen && \
     locale-gen && \
-    apt-get autoremove --purge && rm -Rf /var/cache/apt/archives && \
+    apt-get autoremove --purge -y && apt-get clean && rm -Rf /var/lib/apt/lists/* /var/cache/apt/archives && \
     unset DEBIAN_FRONTEND
 
 ENV LANG ${LANG}
@@ -57,12 +66,12 @@ RUN userdel ubuntu && \
     echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME && \
     chmod 0440 /etc/sudoers.d/$USERNAME
 
+# Note: See above for more versions necessary for apt installation.
 ARG SKAFFOLD_VERSION=2.13.2
 ARG KUBECTL_VERSION=1.30.4
 ARG HELM_VERSION=3.16.2
 ARG KUBESEAL_VERSION=0.27.2
 ARG K9S_VERSION=0.32.5
-ARG MONGOCLI_VERSION=2.0.7
 
 COPY install-system-dependencies.sh /usr/local/bin/install-system-dependencies
 RUN chmod +x /usr/local/bin/install-system-dependencies && \

@@ -2,11 +2,6 @@
 set -e
 
 DPKG_ARCHITECTURE=$(dpkg --print-architecture)
-MONGOCLI_ARCHITECTURE=${DPKG_ARCHITECTURE}
-
-if [ "${MONGOCLI_ARCHITECTURE}" = "amd64" ]; then
-    MONGOCLI_ARCHITECTURE=x86_64
-fi
 
 mkdir /tmp/ohio-pkgs || true
 rm -Rf /tmp/ohio-pkgs/* || true
@@ -39,10 +34,4 @@ echo "Installing k9s ${K9S_VERSION}..."
 curl -Lo /tmp/ohio-pkgs/k9s.tar.gz https://github.com/derailed/k9s/releases/download/v"${K9S_VERSION}"/k9s_Linux_"${DPKG_ARCHITECTURE}".tar.gz && \
     tar -C /tmp/ohio-pkgs -zxvf /tmp/ohio-pkgs/k9s.tar.gz && \
     install -m 755 /tmp/ohio-pkgs/k9s /usr/local/bin/k9s && \
-    rm -Rf /tmp/ohio-pkgs/*
-
-echo "Installing mongocli ${MONGOCLI_VERSION}..."
-curl -Lo /tmp/ohio-pkgs/mongocli.deb https://github.com/mongodb/mongodb-cli/releases/download/mongocli%2Fv"${MONGOCLI_VERSION}"/mongocli_"${MONGOCLI_VERSION}"_linux_"${MONGOCLI_ARCHITECTURE}".deb && \
-    apt-get update && \
-    apt-get install -y /tmp/ohio-pkgs/mongocli.deb && \
     rm -Rf /tmp/ohio-pkgs/*
