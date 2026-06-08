@@ -176,7 +176,8 @@ get_artifactory_token() {
     artifactory_info=$(cat <<-'EOF'
 	🐳 It's time to login to Artifactory.
 
-    Go to https://artifactory.oit.ohio.edu and login. Once you've logged in,
+    Go to https://artifactory.oit.ohio.edu and login with
+    SAML SSO (button on the bottom). Once you've logged in,
     click on your username in the top right and select:
 
 	→ Edit Profile
@@ -186,7 +187,7 @@ EOF
     )
 
     instruction "${artifactory_info}"
-    gum input --password --width=80 --placeholder="Artifactory Token"
+    ARTIFACTORY_TOKEN="$(gum input --password --width=80 --placeholder="Artifactory Token")"
 
     echo "${ARTIFACTORY_TOKEN}" | tr -d '[:space:]'
 }
@@ -1221,16 +1222,21 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
         if [[ "${HAVE_DOCKER}" = "true" ]]; then
             if ! docker login docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "" &>/dev/null; then
                 [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-                [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
 
-                if [[ -z "${ARTIFACTORY_TOKEN}" ]] || [[ -z "${USER_OHIOID}" ]]; then
+                if [[ -z "${USER_OHIOID}" ]]; then
                     warn "Skipping Artifactory login for Docker and Helm. You'll need to configure these manually or rerun this script."
                 else
-                    if docker login -u "${USER_OHIOID}" --password-stdin docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "${ARTIFACTORY_TOKEN}"; then
-                        info "🎉 Successfully logged into Artifactory's Docker Registry!"
-                    else
-                        exit 1
-                    fi
+                    while true; do
+                        [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+
+                        if docker login -u "${USER_OHIOID}" --password-stdin docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "${ARTIFACTORY_TOKEN}"; then
+                            info "🎉 Successfully logged into Artifactory's Docker Registry!"
+                            break
+                        fi
+
+                        warn "Artifactory login failed. Please try again."
+                        ARTIFACTORY_TOKEN=""
+                    done
                 fi
             else
                 info "🎉 You're already logged into Artifactory's Docker Registry!"
