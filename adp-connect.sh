@@ -272,7 +272,7 @@ call_rancher() {
         return 1
     fi
 
-    echo "$RESPONSE"
+    printf '%s' "$RESPONSE"
 }
 
 download_latest_release() {
@@ -293,15 +293,15 @@ download_latest_release() {
     info "🔍 Searching for the latest release of $binary_name from $repo..."
 
     latest_release_json=$(curl -s "https://api.github.com/repos/$repo/releases/latest")
-    latest_release=$(echo "${latest_release_json}" | grep -e '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
+    latest_release=$(printf '%s' "${latest_release_json}" | grep -e '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
 
     for arch in "${LOCAL_ARCH[@]}"; do
         if [[ -n "$format" ]]; then
             debug "Searching for $format package..."
-            binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?(\.|$format)\"" | cut -d '"' -f 4)
+            binary_url=$(printf '%s' "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?(\.|$format)\"" | cut -d '"' -f 4)
         else
             debug "Searching for uncompressed binary..."
-            binary_url=$(echo "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?\"" | cut -d '"' -f 4)
+            binary_url=$(printf '%s' "$latest_release_json" | grep -Ei "browser_download_url.*$binary_name.*$LOCAL_OS.*$arch(.*$latest_release)?\"" | cut -d '"' -f 4)
         fi
 
         if [[ -n "$binary_url" ]]; then
@@ -318,7 +318,7 @@ download_latest_release() {
                 yq -P -C -o json <<< "${latest_release_json}"
             else
                 debug "JSON from GitHub:"
-                echo "${latest_release_json}"
+                printf '%s' "${latest_release_json}"
             fi
         fi
 
@@ -336,7 +336,7 @@ download_latest_release() {
     fi
 
     for checksum_file in "${checksum_files[@]}"; do
-        checksum_url=$(echo "$latest_release_json" | grep -E "browser_download_url.*$checksum_file\"" | cut -d '"' -f 4)
+        checksum_url=$(printf '%s' "$latest_release_json" | grep -E "browser_download_url.*$checksum_file\"" | cut -d '"' -f 4)
 
         if [[ -n "$checksum_url" ]]; then
             break
@@ -454,7 +454,7 @@ rancher_login() {
 
     # Remove protocol if present
     # shellcheck disable=SC2001
-    rancher_hostname=$(echo "$rancher_hostname" | sed -e 's|^[a-zA-Z]*://||')
+    rancher_hostname=$(printf '%s' "$rancher_hostname" | sed -e 's|^[a-zA-Z]*://||')
 
     if [[ -e "${HOME}/.rancher/cli2.json" ]] && [[ "$(rancher server ls | grep -c "${rancher_hostname}")" -gt 1 ]]; then
         warn "🚨 Multiple Rancher servers are configured with the hostname ${rancher_hostname}. Cleaning that up."
@@ -477,15 +477,15 @@ rancher_login() {
     # shellcheck disable=SC2181
     if [[ "$?" -ne 0 ]]; then
         error "❌ Error: Failed to login to Rancher."
-        exit 1
+        return 1
     fi
 
-    rancher_token=$(echo "${rancher_token_credential}" | yq -r '.status.token')
+    rancher_token=$(printf '%s' "${rancher_token_credential}" | yq -r '.status.token')
 
     # shellcheck disable=SC2181
     if [[ "$?" -ne 0 ]] || [[ -z "$rancher_token" ]]; then
         error "❌ Error: Failed to get parse token response from Rancher."
-        exit 1
+        return 1
     fi
 
     rancher_project=""
@@ -496,8 +496,9 @@ rancher_login() {
     if [[ -z "$rancher_project" ]]; then
         rancher_project=$(call_rancher "$rancher_token" "https://${rancher_hostname}/v3/projects" | yq -r '.data[0].id')
         if [[ -z "$rancher_project" ]]; then
-            error "❌ Error: Failed to find any projects in Rancher."
-            exit 1
+            error "❌ Error: Failed to find any projects in Rancher:"
+            call_rancher "$rancher_token" "https://${rancher_hostname}/v3/projects"
+            return 1
         fi
     fi
 
@@ -588,14 +589,14 @@ the project you'll use most often and enter the number in the first column."
             warn "There was an error communicating with the ${RANCHER_CURRENT_CLUSTER} cluster. Please select a different cluster and project."
             AVAILABLE_NAMESPACES=""
         else
-            AVAILABLE_NAMESPACES=$(echo "${AVAILABLE_NAMESPACES}" | sort)
+            AVAILABLE_NAMESPACES=$(printf '%s' "${AVAILABLE_NAMESPACES}" | sort)
 
             if [[ -z "${AVAILABLE_NAMESPACES}" ]]; then
                 warn "You don't seem to have access to any namespaces in the $(rancher context current) context. Please select a different cluster and project."
                 DEFAULT_NAMESPACE=""
             else
                 info "Select your default namespace:"
-                DEFAULT_NAMESPACE=$(echo "${AVAILABLE_NAMESPACES}" | gum choose --select-if-one --ordered)
+                DEFAULT_NAMESPACE=$(printf '%s' "${AVAILABLE_NAMESPACES}" | gum choose --select-if-one --ordered)
 
                 if ! [[ "$DEFAULT_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
                     warn "The namespace you selected (${DEFAULT_NAMESPACE}) is not a valid Kubernetes namespace name. This should not happen, please let ADP know and select a differnt namespace."
@@ -683,7 +684,7 @@ if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" != "true" ]]; then
     curl -s "${SCRIPT_SOURCE_URL}" -o "${HOME}/.local/bin/adp-connect"
     chmod +x "${HOME}/.local/bin/adp-connect"
 
-    if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+    if ! printf '%s' "$PATH" | grep -q "$HOME/.local/bin"; then
         echo "Please ensure that \$HOME/.local/bin is in your PATH."
 
         case "$(basename "$SHELL")" in
@@ -798,7 +799,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             debug "Detected incomplete Rancher CLI configuration, deleting it."
             rm "${HOME}"/.rancher/cli2.json
 
-            rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
+            rancher_login "${DEFAULT_RANCHER_HOSTNAME}" || exit 1
         else
             if [[ -z "${FORCE_ADD_MORE_RANCHERS}" ]]; then
                 ALL_RANCHERS_ADDED="true"
@@ -810,17 +811,17 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
         recommended to clear your config and start over."
                 if confirm "Would you like to clear your Rancher CLI configuration?"; then
                     rm -f "$HOME/.rancher/cli2.json"
-                    rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
+                    rancher_login "${DEFAULT_RANCHER_HOSTNAME}" || exit 1
                 fi
             fi
 
             if [[ "$(yq -r '.Servers | length' < "$HOME/.rancher/cli2.json")" = "0" ]]; then
                 debug "Found $(yq -r '.Servers | length' < "$HOME/.rancher/cli2.json") servers in this configuration."
-                rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
+                rancher_login "${DEFAULT_RANCHER_HOSTNAME}" || exit 1
             fi
         fi
     else
-        rancher_login "${DEFAULT_RANCHER_HOSTNAME}"
+        rancher_login "${DEFAULT_RANCHER_HOSTNAME}" || exit 1
     fi
 
     while ! [[ "${ALL_RANCHERS_ADDED}" = "true" ]]; do
@@ -862,7 +863,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
 
         if ! gum spin --show-error --title="Checking ${SERVER}..." rancher project list; then
             yq -i '.Servers["'"${SERVER}"'"].project = ""' "$HOME/.rancher/cli2.json"
-            rancher_login "${SERVER}"
+            rancher_login "${SERVER}" || warn "Unable to login to ${SERVER}. Skipping."
         fi
 
         REACHABLE_RANCHER_SERVERS+=("${SERVER}")
@@ -896,7 +897,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
             for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
             if [[ -z "${SKIP_KUBECONFIG}" ]]; then
-                TEMP_KUBE_CONFIG=$(echo "${SERVER}-${CLUSTER}" | base64)
+                TEMP_KUBE_CONFIG=$(printf '%s' "${SERVER}-${CLUSTER}" | base64)
                 debug "Fetching kubeconfig for cluster ${CLUSTER} on server ${SERVER}..."
                 gum spin --show-error --title="Fetching kubeconfig for cluster ${CLUSTER}..." -- rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
                 KUBE_CONFIGS+=("${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml")
@@ -927,10 +928,10 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
         debug "Latest Kubernetes version: ${KUBE_LATEST_VERSION}"
         debug "Oldest Kubernetes version: ${KUBE_OLDEST_VERSION}"
 
-        KUBE_LATEST_MAJOR=$(echo "${KUBE_LATEST_VERSION}" | cut -d. -f1)
-        KUBE_LATEST_MINOR=$(echo "${KUBE_LATEST_VERSION}" | cut -d. -f2)
-        KUBE_OLDEST_MAJOR=$(echo "${KUBE_OLDEST_VERSION}" | cut -d. -f1)
-        KUBE_OLDEST_MINOR=$(echo "${KUBE_OLDEST_VERSION}" | cut -d. -f2)
+        KUBE_LATEST_MAJOR=$(printf '%s' "${KUBE_LATEST_VERSION}" | cut -d. -f1)
+        KUBE_LATEST_MINOR=$(printf '%s' "${KUBE_LATEST_VERSION}" | cut -d. -f2)
+        KUBE_OLDEST_MAJOR=$(printf '%s' "${KUBE_OLDEST_VERSION}" | cut -d. -f1)
+        KUBE_OLDEST_MINOR=$(printf '%s' "${KUBE_OLDEST_VERSION}" | cut -d. -f2)
 
         if [[ "${KUBE_LATEST_MAJOR}" != "${KUBE_OLDEST_MAJOR}" ]] || (( 10#${KUBE_LATEST_MINOR} > 10#${KUBE_OLDEST_MINOR} + 1 )); then
             KUBE_ALLOWED_MINOR=$((10#${KUBE_OLDEST_MINOR} + 1))
@@ -1000,7 +1001,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'"$(kubectl config current-context)"'")].context.namespace}')
             CURRENT_CLUSTER_URL=$(kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'"$(kubectl config current-context)"'")].cluster.server}')
             # shellcheck disable=SC2001
-            CURRENT_RANCHER_SERVER_URL=$(echo "${CURRENT_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
+            CURRENT_RANCHER_SERVER_URL=$(printf '%s' "${CURRENT_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
             CURRENT_RANCHER_SERVER_NAME=$(rancher server ls | sed 's/^*//g' | grep -v CURRENT | grep "${CURRENT_RANCHER_SERVER_URL}" | awk '{ print $1 }')
 
             debug "Current namespace: ${CURRENT_NAMESPACE}"
@@ -1024,7 +1025,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
         NEW_NAMESPACE=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'"$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)"'")].context.namespace}')
         NEW_CLUSTER_URL=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'"$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)"'")].cluster.server}')
         # shellcheck disable=SC2001
-        NEW_RANCHER_SERVER_URL=$(echo "${NEW_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
+        NEW_RANCHER_SERVER_URL=$(printf '%s' "${NEW_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
         NEW_RANCHER_SERVER_NAME=$(rancher server ls |  sed 's/^*//g' | grep -v CURRENT | grep "${NEW_RANCHER_SERVER_URL}" | awk '{ print $1 }')
 
         if [[ -z "${NEW_NAMESPACE}" ]] && [[ -n "${CURRENT_NAMESPACE}" ]]; then
@@ -1264,7 +1265,7 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
                     info "Need to relogin to ArgoCD at ${ARGOCD_SERVER}..."
                     argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
                 else
-                    info "🎉 You're successfully authenticated to ArgoCD at $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+                    info "🎉 You're successfully authenticated to ArgoCD at $(printf '%s' "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
                 fi
             done
 
@@ -1301,7 +1302,7 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
                 info "Logging into ArgoCD at ${ARGOCD_SERVER}..."
                 argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
 
-                info "🎉 You're successfully authenticated to $(echo "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+                info "🎉 You're successfully authenticated to $(printf '%s' "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
             done
 
             argocd context "${ARGOCD_CURRENT_CONTEXT}" 1>/dev/null || exit 1
