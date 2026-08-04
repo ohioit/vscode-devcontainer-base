@@ -24,6 +24,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
         git \
         curl \
         sudo \
+        htop \
         zsh \
         shellcheck \
         jq \
