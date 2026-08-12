@@ -348,7 +348,7 @@ download_latest_release() {
             gum spin --show-error --show-output --title="Downloading checksums..." -- \
                 curl -sL --show-error "$checksum_url" -o "${TEMP_DIR}/${binary_name}_checksums"
         else
-            info -e "🔗 Downloading checksums..."
+            info "🔗 Downloading checksums..."
             curl -L --show-error "$checksum_url" -o "${TEMP_DIR}/${binary_name}_checksums"
         fi
 
@@ -749,7 +749,7 @@ the integrity of these cannot be assured. You've accepted this risk with the -I 
 the ACCEPT_SUPPLY_CHAIN_SECURITY environment variable. Continuing."
 fi
 
-if should_install "gum"; then
+if [[ -n "${FORCE_UPDATE}" ]] || ! gum -v &>/dev/null; then
     download_latest_release "charmbracelet/gum" "gum" "tar.gz" || exit 1
     extract_download "gum" "tar.gz" || exit 1
     install -m "0755" "${TEMP_DIR}/gum"*/"gum" "$HOME/.local/bin/gum" || exit 1
