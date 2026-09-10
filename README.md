@@ -158,11 +158,17 @@ container, you will need to copy this file out of the container onto your system
 > NOTE: The below commands will erase any configured helm repositories on your host. If
 > you have some, you should run the above command on your host instead.
 
+To keep Ohio-specific repositories separate, optionally place them in a
+`repositories-ohio.yaml` file beside `repositories.yaml` on your host. Container startup
+merges its repositories with `repositories.yaml` before it adds repositories inferred from
+project `Chart.yaml` dependencies. Existing repositories from either file are not replaced
+by those inferred dependencies.
+
 #### Linux/Windows
 
 ```bash
 test -d "${HOST_HOME}"/.config/helm || mkdir -p "${HOST_HOME}"/.config/helm
-cp ~/.config/helm/repositories.yaml "${HOST_HOME}/.config/repositories.yaml
+cp ~/.config/helm/repositories.yaml "${HOST_HOME}/.config/helm/repositories.yaml
 ```
 
 #### Mac OS
