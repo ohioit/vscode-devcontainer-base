@@ -39,6 +39,7 @@ else
 
     HELM_REPOSITORIES_YAML=/home/vscode/.config/helm/repositories.yaml
     HOST_HELM_REPOSITORIES_YAML=""
+    HOST_HELM_REPOSITORIES_OHIO_YAML=""
     for HOST_HELM in "${HOST_HOME}/.config/helm/repositories.yaml" "${HOST_HOME}/Library/Preferences/helm/repositories.yaml"; do
         if [[ -e "${HOST_HELM}" ]]; then
             HOST_HELM_REPOSITORIES_YAML="${HOST_HELM}"
@@ -49,6 +50,15 @@ else
     if [[ -n "${HOST_HELM_REPOSITORIES_YAML}" ]]; then
         sudo cp "${HOST_HELM_REPOSITORIES_YAML}" "${HELM_REPOSITORIES_YAML}"
         sudo chown vscode:vscode "${HELM_REPOSITORIES_YAML}"
+
+        HOST_HELM_REPOSITORIES_OHIO_YAML="$(dirname "${HOST_HELM_REPOSITORIES_YAML}")/repositories-ohio.yaml"
+        if [[ -e "${HOST_HELM_REPOSITORIES_OHIO_YAML}" ]]; then
+            echo "✓ Found Ohio Helm repositories configuration at ${HOST_HELM_REPOSITORIES_OHIO_YAML}"
+            yq eval-all '. as $repository_config ireduce ({}; . *+ $repository_config)' \
+                "${HELM_REPOSITORIES_YAML}" "${HOST_HELM_REPOSITORIES_OHIO_YAML}" > /tmp/repositories.yaml
+            sudo mv /tmp/repositories.yaml "${HELM_REPOSITORIES_YAML}"
+            sudo chown vscode:vscode "${HELM_REPOSITORIES_YAML}"
+        fi
     else
         echo "Note: No user helm repositories were found in ${HOST_HOME}/.config/helm/repositories.yaml. You will not be able to use helm charts in Artifactory until this is setup." 1>&2
     fi
@@ -63,8 +73,10 @@ else
 
                 if ! [[ -e "${HELM_REPOSITORIES_YAML}" ]] || ! (yq -r '.repositories[].url' "${HELM_REPOSITORIES_YAML}" | grep -q '^'"${DEPENDENCY}"'$'); then
                     DEPENDENCY_NAME=$(echo "${DEPENDENCY}" | sed -r 's/https?:\/\/(.*)/\1/' | sed -r 's/[\,\/]/-/g')
-                    echo "Adding Helm repository for ${DEPENDENCY_NAME} from current project."
-                    helm repo add "${DEPENDENCY_NAME}" "${DEPENDENCY}"
+                    if ! yq -r '.repositories[].name' "${HELM_REPOSITORIES_YAML}" | grep -q '^'"${DEPENDENCY_NAME}"'$'; then
+                        echo "Adding Helm repository for ${DEPENDENCY_NAME} from current project."
+                        helm repo add "${DEPENDENCY_NAME}" "${DEPENDENCY}"
+                    fi
                 fi
             done
         fi
