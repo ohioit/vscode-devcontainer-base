@@ -1073,7 +1073,7 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
 fi
 
 if should_install "kubeseal"; then
-    download_latest_release "bitnami-labs/sealed-secrets" "kubeseal" "tar.gz" || exit 1
+    download_latest_release "bitnami/sealed-secrets" "kubeseal" "tar.gz" || exit 1
     extract_download "kubeseal" "tar.gz" || exit 1
     install -m "0755" "${TEMP_DIR}/kubeseal" "$HOME/.local/bin/kubeseal" || exit 1
     info "🎉 Successfully installed kubeseal!"
