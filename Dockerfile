@@ -1,6 +1,6 @@
 FROM ubuntu:24.04
 
-LABEL org.opencontainers.image.source https://github.com/ohioit/vscode-devcontainer-base
+LABEL org.opencontainers.image.source=https://github.com/ohioit/vscode-devcontainer-base
 
 ARG USERNAME=vscode
 ARG USER_UID=1000
@@ -54,9 +54,9 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get autoremove --purge -y && apt-get clean && rm -Rf /var/lib/apt/lists/* /var/cache/apt/archives && \
     unset DEBIAN_FRONTEND
 
-ENV LANG ${LANG}
-ENV LANGUAGE ${LANGUAGE}
-ENV LC_ALL ${LC_ALL}
+ENV LANG=${LANG}
+ENV LANGUAGE=${LANGUAGE}
+ENV LC_ALL=${LC_ALL}
 
 RUN userdel ubuntu && \
     rm -Rf /home/ubuntu && \
@@ -67,11 +67,11 @@ RUN userdel ubuntu && \
     chmod 0440 /etc/sudoers.d/$USERNAME
 
 # Note: See above for more versions necessary for apt installation.
-ARG SKAFFOLD_VERSION=2.13.2
-ARG KUBECTL_VERSION=1.30.4
-ARG HELM_VERSION=3.16.2
-ARG KUBESEAL_VERSION=0.27.2
-ARG K9S_VERSION=0.32.5
+ARG SKAFFOLD_VERSION=2.25.0
+ARG KUBECTL_VERSION=1.36.6
+ARG HELM_VERSION=4.3.1
+ARG KUBESEAL_VERSION=0.41.2
+ARG K9S_VERSION=0.51.0
 
 COPY install-system-dependencies.sh /usr/local/bin/install-system-dependencies
 RUN chmod +x /usr/local/bin/install-system-dependencies && \
