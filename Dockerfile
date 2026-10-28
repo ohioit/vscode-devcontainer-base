@@ -67,11 +67,11 @@ RUN userdel ubuntu && \
     chmod 0440 /etc/sudoers.d/$USERNAME
 
 # Note: See above for more versions necessary for apt installation.
-ARG SKAFFOLD_VERSION=2.13.2
-ARG KUBECTL_VERSION=1.30.4
-ARG HELM_VERSION=3.16.2
-ARG KUBESEAL_VERSION=0.27.2
-ARG K9S_VERSION=0.32.5
+ARG SKAFFOLD_VERSION=2.25.0
+ARG KUBECTL_VERSION=1.36.6
+ARG HELM_VERSION=4.3.1
+ARG KUBESEAL_VERSION=0.41.2
+ARG K9S_VERSION=0.51.0
 
 COPY install-system-dependencies.sh /usr/local/bin/install-system-dependencies
 RUN chmod +x /usr/local/bin/install-system-dependencies && \

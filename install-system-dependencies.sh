@@ -13,9 +13,10 @@ chmod +x /usr/local/bin/skaffold
 
 echo "Installing Kubectl ${KUBECTL_VERSION}..."
 curl -LO \
-    https://storage.googleapis.com/kubernetes-release/release/v"${KUBECTL_VERSION}"/bin/linux/"${DPKG_ARCHITECTURE}"/kubectl
-chmod +x ./kubectl
-mv ./kubectl /usr/local/bin/kubectl
+    https://dl.k8s.io/v"${KUBECTL_VERSION}"/kubernetes-client-"$(uname -s | tr '[:upper:]' '[:lower:]')"-"${DPKG_ARCHITECTURE}".tar.gz
+tar -C /tmp/ohio-pkgs -zxvf kubernetes-client-"$(uname -s | tr '[:upper:]' '[:lower:]')"-"${DPKG_ARCHITECTURE}".tar.gz
+chmod +x /tmp/ohio-pkgs/kubernetes/client/bin/*
+mv /tmp/ohio-pkgs/kubernetes/client/bin/* /usr/local/bin/
 
 echo "Installing Helm ${HELM_VERSION}..."
 curl -Lo /tmp/ohio-pkgs/helm.tar.gz https://get.helm.sh/helm-v"${HELM_VERSION}"-linux-"${DPKG_ARCHITECTURE}".tar.gz
