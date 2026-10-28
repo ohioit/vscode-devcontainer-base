@@ -1,6 +1,6 @@
 FROM ubuntu:24.04
 
-LABEL org.opencontainers.image.source https://github.com/ohioit/vscode-devcontainer-base
+LABEL org.opencontainers.image.source=https://github.com/ohioit/vscode-devcontainer-base
 
 ARG USERNAME=vscode
 ARG USER_UID=1000
@@ -54,9 +54,9 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get autoremove --purge -y && apt-get clean && rm -Rf /var/lib/apt/lists/* /var/cache/apt/archives && \
     unset DEBIAN_FRONTEND
 
-ENV LANG ${LANG}
-ENV LANGUAGE ${LANGUAGE}
-ENV LC_ALL ${LC_ALL}
+ENV LANG=${LANG}
+ENV LANGUAGE=${LANGUAGE}
+ENV LC_ALL=${LC_ALL}
 
 RUN userdel ubuntu && \
     rm -Rf /home/ubuntu && \

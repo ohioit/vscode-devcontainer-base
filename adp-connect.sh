@@ -181,8 +181,8 @@ get_artifactory_token() {
     click on your username in the top right and select:
 
 	→ Edit Profile
-    → Generate an API Key (not an Identity Token) if one doesn't already exist.
-    → Copy the API Key and paste it here (click the icon next to the field to copy it).
+    → Generate an Identity Token. You cannot reuse an existing one.
+    → Copy the Reference Token and paste it here (click the icon next to the field to copy it).
 EOF
     )
 
