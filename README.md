@@ -123,6 +123,29 @@ You will need to have access to your Docker, Kubernetes, and Helm credentials
 to do much of this work. The easiest way to do this is inside of the container,
 see below.
 
+### Connecting with an AI agent
+
+`adp-connect` sets up your access to Rancher (Kubernetes), Artifactory, Argo CD,
+and GitHub. If you use an AI coding agent, you can ask it to help, for example:
+
+> Read https://github.com/ohioit/vscode-devcontainer-base and help me connect to ADP.
+
+The agent will install the tools, check what's already set up, and then ask
+**you** to run one command in your own terminal. That's because signing in needs
+your browser and prompts that only you should answer. When it's done, the agent
+checks again to confirm everything works.
+
+- The agent may suggest `adp-connect -a`. Use it if you follow common Ohio IT
+  practices, and ask someone if you're not sure. It also sets up Artifactory and
+  Argo CD, which need access that may have to be granted before they work.
+- Never paste tokens or passwords into the chat. Type them only into the
+  `adp-connect` prompts.
+- If you've added servers of your own, the agent may tell you they're
+  unreachable. That's usually not a problem with your Ohio setup.
+- If `adp-connect` itself seems broken, the agent can help you draft an
+  [issue](https://github.com/ohioit/vscode-devcontainer-base/issues/new?template=adp-connect.yml).
+  It removes credentials and personal details first, and you review and submit it.
+
 ### Docker Credentials
 
 Visual Studio Code now correctly sets up Docker credentials when

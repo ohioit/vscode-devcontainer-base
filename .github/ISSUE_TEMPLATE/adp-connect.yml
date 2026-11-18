@@ -1,0 +1,52 @@
+name: adp-connect problem
+description: Report a problem with the adp-connect setup script.
+title: "adp-connect: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. **Before you paste anything, remove tokens, passwords, your
+        OHIO ID, name, email and the hostnames of any servers you added yourself.** Never paste
+        output from `adp-connect -T`; it contains credentials.
+  - type: input
+    id: command
+    attributes:
+      label: Command you ran
+      placeholder: adp-connect -a
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: What happened
+      description: The error lines from your terminal and what you expected to happen.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `adp-connect -C -a`
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS, architecture, shell and WSL
+      description: The `os`, `shell` and `wsl` lines from `adp-connect -C`.
+      placeholder: linux/x86_64, zsh, WSL no
+    validations:
+      required: true
+  - type: input
+    id: checksum
+    attributes:
+      label: adp-connect.sha256
+      description: The `adp-connect.sha256` line from `adp-connect -C`.
+  - type: checkboxes
+    id: sanitized
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed tokens, passwords, personal info and hostnames of servers I added myself.
+          required: true
