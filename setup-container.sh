@@ -18,7 +18,7 @@ if [[ -d "${PRE_CONFIG_HOOKS}" ]] && [ "$(ls -A "${PRE_CONFIG_HOOKS}")" ]; then
     done
 fi
 
-mkdir -p /home/vscode/.docker /home/vscode/.kube /home/vscode/.config/helm || true
+mkdir -p /home/vscode/.docker "${DOCKER_CONFIG:-/home/vscode/.docker}" /home/vscode/.kube /home/vscode/.config/helm || true
 
 if [[ -z "${HOST_HOME}" ]]; then
     echo "Warning: HOST_HOME environment variable is not, unable to setup user customizations. This means that things like docker, helm, kubectl, and skaffold will not work" 1>&2
@@ -60,8 +60,15 @@ else
             sudo chown vscode:vscode "${HELM_REPOSITORIES_YAML}"
         fi
     else
-        echo "Note: No user helm repositories were found in ${HOST_HOME}/.config/helm/repositories.yaml. You will not be able to use helm charts in Artifactory until this is setup." 1>&2
+        echo "Note: No user helm repositories were found in ${HOST_HOME}/.config/helm/repositories.yaml. That's fine if you only use OCI charts such as oci://docker.artifactory.oit.ohio.edu/charts." 1>&2
     fi
+
+    echo "Setting up Docker and Helm registry logins..."
+    # Copies the host's Docker and Helm registry logins into ${DOCKER_CONFIG}
+    # and Helm's registry config, so both work with or without VS Code
+    # attached. `adp-connect -a` on the host logs into Artifactory, which
+    # serves the Ohio charts at oci://docker.artifactory.oit.ohio.edu/charts.
+    /usr/local/bin/sync-registry-credentials docker.artifactory.oit.ohio.edu
 
     for WORKSPACE in /workspaces/*; do
         if [[ -e "${WORKSPACE}/helm/Chart.yaml" ]]; then

@@ -194,6 +194,24 @@ before the script processes dependencies from `/workspaces/*/helm/Chart.yaml`. C
 repositories are only added when neither their URL nor their generated name is already configured;
 this avoids replacing repositories supplied by either host file. OCI dependencies are skipped.
 
+Registry logins for Docker and Helm are handled by `sync-registry-credentials.sh` (installed as
+`/usr/local/bin/sync-registry-credentials`) so both work with or without VS Code attached (e.g. the
+devcontainer CLI alone). The image sets `DOCKER_CONFIG=/home/vscode/.config/docker`; VS Code's Dev
+Containers extension rewrites `~/.docker/config.json` to forward credentials only while it is attached,
+so that file is deliberately unused. Do not point anything back at `~/.docker`. The script writes:
+
+- `${DOCKER_CONFIG}/config.json`: the host's `.docker/config.json` logins.
+- `/home/vscode/.config/helm/registry/config.json`: the host's Docker logins, then its
+  `.config/helm/registry/config.json` and `Library/Preferences/helm/registry/config.json` (later wins).
+
+Only `auths` entries with an inline `auth` or `identitytoken` are kept; `credsStore`, `credHelpers` and
+every other host Docker setting (contexts, plugin paths, proxies) are dropped, because host keychains and
+paths are not reachable from the container. It must never print credentials. Helm (v3 and v4) checks its
+own registry config first and then falls back to `${DOCKER_CONFIG}/config.json`. Ohio charts come from
+`oci://docker.artifactory.oit.ohio.edu/charts`; `setup-container.sh` passes `docker.artifactory.oit.ohio.edu`
+so startup reports whether it is usable. `adp-connect` only runs `helm registry login` when Docker has no
+login for that registry.
+
 ## Shell Script Conventions
 
 - Shell scripts use Bash. Keep existing four-space indentation and quote variable expansions.
@@ -225,7 +243,8 @@ Run focused checks for modified scripts:
 bash -n setup-container.sh
 bash -n install-system-dependencies.sh
 bash -n install-user-dependencies.sh
-shellcheck setup-container.sh install-system-dependencies.sh install-user-dependencies.sh
+bash -n sync-registry-credentials.sh
+shellcheck setup-container.sh install-system-dependencies.sh install-user-dependencies.sh sync-registry-credentials.sh
 git diff --check
 ```
 

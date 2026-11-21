@@ -83,6 +83,12 @@ DEFAULT_RANCHER_HOSTNAME="rancher.oit.ohio.edu"
 DEFAULT_RANCHER_AUTH_PROVIDER="azureADProvider"
 DEFAULT_ARTIFACTORY_HOSTNAME="artifactory.oit.ohio.edu"
 DEFAULT_ARGOCD_HOSTNAME="argo.ops.kube.ohio.edu"
+DEFAULT_HELM_OCI_REGISTRY="docker.${DEFAULT_ARTIFACTORY_HOSTNAME}"
+DEFAULT_HELM_OCI_REPOSITORY="oci://${DEFAULT_HELM_OCI_REGISTRY}/charts"
+# Classic (non-OCI) Artifactory Helm repositories added by older versions of
+# this script. They are removed in favor of DEFAULT_HELM_OCI_REPOSITORY.
+LEGACY_HELM_REPOSITORIES=("artifactory" "artifactory-push")
+NEEDED_HELM_MAJOR_VERSION=4
 DEFAULT_GITHUB_SERVERS=("github.ohio.edu" "github.com")
 KUBE_CLIENT_CONFIG_SECRET="${KUBE_CLIENT_CONFIG_SECRET:-dev-client-saved-config}"
 KUBE_CLIENT_CONFIG_CONTEXT="${KUBE_CLIENT_CONFIG_CONTEXT:-ais-devtest}"
@@ -481,6 +487,59 @@ should_install() {
     fi
 
     return 0
+}
+
+# Prints the major version of the installed helm (e.g. "3"), or nothing.
+helm_major_version() {
+    local version
+    version="$(helm version --template '{{.Version}}' 2>/dev/null)"
+    version="${version#v}"
+    echo "${version%%.*}"
+}
+
+# Returns 0 if helm needs to be installed or upgraded to Helm ${NEEDED_HELM_MAJOR_VERSION}.
+should_install_helm() {
+    local major
+
+    should_install "helm" && return 0
+
+    major="$(helm_major_version)"
+    if [[ -z "${major}" ]] || (( 10#${major} < NEEDED_HELM_MAJOR_VERSION )); then
+        debug "⬆️  helm ${major:-unknown} is older than ${NEEDED_HELM_MAJOR_VERSION}, upgrading."
+        return 0
+    fi
+
+    return 1
+}
+
+# Returns 0 if the JSON registry config $1 has a login entry for registry $2.
+registry_config_has_login() {
+    [[ -f "$1" ]] || return 1
+    [[ "$(yq -p json -r '(.auths // {} | has("'"$2"'")) or (.credHelpers // {} | has("'"$2"'"))' "$1" 2>/dev/null)" = "true" ]]
+}
+
+# Prints where helm gets credentials for the given OCI registry host: "helm"
+# (its own registry config), "docker" (helm falls back to Docker's config, so a
+# `docker login` is enough) or nothing. Only checks the configs; never prints them.
+helm_registry_login_source() {
+    local registry="$1"
+
+    if registry_config_has_login "$(helm env HELM_REGISTRY_CONFIG 2>/dev/null)" "${registry}"; then
+        echo "helm"
+    elif registry_config_has_login "${DOCKER_CONFIG:-$HOME/.docker}/config.json" "${registry}"; then
+        echo "docker"
+    fi
+}
+
+# Prints the names of legacy Artifactory Helm repositories that are still configured.
+legacy_helm_repositories() {
+    local repo
+
+    for repo in "${LEGACY_HELM_REPOSITORIES[@]}"; do
+        if helm repo list -o yaml 2>/dev/null | yq -r '.[].name' 2>/dev/null | grep -qx "${repo}"; then
+            echo "${repo}"
+        fi
+    done
 }
 
 is_in_array() {
@@ -886,6 +945,13 @@ run_status_check() {
             status_info "rancher.version" "ok"
         fi
     fi
+    if which helm &>/dev/null; then
+        if [[ "$(helm_major_version)" -ge "${NEEDED_HELM_MAJOR_VERSION}" ]] 2>/dev/null; then
+            status_info "helm.version" "ok"
+        else
+            status_line "helm.version" "expired (older than Helm ${NEEDED_HELM_MAJOR_VERSION}; a rerun upgrades it)"
+        fi
+    fi
     if ! which docker &>/dev/null; then
         status_info "docker" "not installed"
     elif docker ps &>/dev/null; then
@@ -1055,16 +1121,22 @@ run_status_check() {
             status_line "artifactory.docker (${host})" "missing (not logged in)"
         fi
 
-        # Artifactory: Helm repositories
-        for repo in artifactory artifactory-push; do
-            if ! which helm &>/dev/null; then
-                status_line "artifactory.helm.${repo} (${DEFAULT_ARTIFACTORY_HOSTNAME})" "missing (helm not installed)"
-            elif helm search repo "${repo}" --fail-on-no-result -o yaml &>/dev/null; then
-                status_line "artifactory.helm.${repo} (${DEFAULT_ARTIFACTORY_HOSTNAME})" "ok"
-            else
-                status_line "artifactory.helm.${repo} (${DEFAULT_ARTIFACTORY_HOSTNAME})" "missing"
-            fi
-        done
+        # Artifactory: Helm OCI repository
+        if ! which helm &>/dev/null; then
+            status_line "artifactory.helm (${DEFAULT_HELM_OCI_REPOSITORY})" "missing (helm not installed)"
+        elif [[ "$(helm_registry_login_source "${DEFAULT_HELM_OCI_REGISTRY}")" = "helm" ]]; then
+            status_line "artifactory.helm (${DEFAULT_HELM_OCI_REPOSITORY})" "ok"
+        elif [[ "$(helm_registry_login_source "${DEFAULT_HELM_OCI_REGISTRY}")" = "docker" ]]; then
+            status_line "artifactory.helm (${DEFAULT_HELM_OCI_REPOSITORY})" "ok (uses the Docker login)"
+        else
+            status_line "artifactory.helm (${DEFAULT_HELM_OCI_REPOSITORY})" "missing (not logged in)"
+        fi
+
+        if which helm &>/dev/null; then
+            for repo in $(legacy_helm_repositories); do
+                status_line "artifactory.helm.legacy.${repo}" "expired (old non-OCI repository; a rerun removes it)"
+            done
+        fi
 
         # Argo CD. `--argocd-context` avoids switching the user's current context.
         if which argocd &>/dev/null; then
@@ -1964,13 +2036,15 @@ check the errors shown above each warning."
     fi
 fi
 
-if should_install "helm"; then
+if should_install_helm; then
     gum spin --show-error --title="Downloading Helm Installer..." -- \
-        curl -Lo "${TEMP_DIR}/get-helm-3" https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-    chmod 755 "${TEMP_DIR}/get-helm-3"
+        curl -fLo "${TEMP_DIR}/get-helm-${NEEDED_HELM_MAJOR_VERSION}" \
+        https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-${NEEDED_HELM_MAJOR_VERSION} || exit 1
+    chmod 755 "${TEMP_DIR}/get-helm-${NEEDED_HELM_MAJOR_VERSION}"
     HELM_INSTALL_DIR="$HOME/.local/bin" USE_SUDO="false" gum spin --show-error \
-        --title="Installing Helm..." "${TEMP_DIR}/get-helm-3" || exit 1
-    info "🎉 Successfully installed Helm!"
+        --title="Installing Helm..." "${TEMP_DIR}/get-helm-${NEEDED_HELM_MAJOR_VERSION}" || exit 1
+    hash -r
+    info "🎉 Successfully installed Helm $(helm version --template '{{.Version}}')!"
 fi
 
 if should_install "skaffold"; then
@@ -2191,37 +2265,45 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
             warn "🚨 Your system is unable to open a browser from a cli (no xdg-open or open tools are available). Skipping ArgoCD configuration."
         fi
 
-        if ! helm search repo artifactory --fail-on-no-result -o yaml &>/dev/null; then
-            info "Adding Artifactory helm repository..."
-            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-            [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+        for LEGACY_HELM_REPOSITORY in $(legacy_helm_repositories); do
+            info "Removing the old Artifactory helm repository ${LEGACY_HELM_REPOSITORY}; charts now come from ${DEFAULT_HELM_OCI_REPOSITORY}."
+            helm repo remove "${LEGACY_HELM_REPOSITORY}" >/dev/null || \
+                warn "Could not remove the helm repository ${LEGACY_HELM_REPOSITORY}. Run 'helm repo remove ${LEGACY_HELM_REPOSITORY}' yourself."
+        done
 
-            if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
-                helm repo add artifactory https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+        # Helm falls back to Docker's credentials, so the Docker login above is
+        # normally enough. A separate helm login is only needed without one,
+        # e.g. when Docker isn't installed or running.
+        HELM_LOGIN_SOURCE="$(helm_registry_login_source "${DEFAULT_HELM_OCI_REGISTRY}")"
+        if [[ "${HELM_LOGIN_SOURCE}" = "docker" ]]; then
+            info "🎉 Helm will use your Artifactory Docker login for ${DEFAULT_HELM_OCI_REPOSITORY}!"
+        elif [[ -z "${HELM_LOGIN_SOURCE}" ]]; then
+            info "Docker isn't logged into Artifactory, so logging helm into ${DEFAULT_HELM_OCI_REPOSITORY} directly..."
+            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+
+            if [[ -z "${USER_OHIOID}" ]]; then
+                warn "Skipping the Artifactory helm login. You'll need to run 'helm registry login ${DEFAULT_HELM_OCI_REGISTRY}' yourself or rerun this script."
             else
-                warn "Skipping adding Artifactory helm repository. You'll need to add it manually or rerun this script."
+                while true; do
+                    [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+
+                    if [[ -z "${ARTIFACTORY_TOKEN}" ]]; then
+                        warn "Skipping the Artifactory helm login. You'll need to run 'helm registry login ${DEFAULT_HELM_OCI_REGISTRY}' yourself or rerun this script."
+                        break
+                    fi
+
+                    if helm registry login "${DEFAULT_HELM_OCI_REGISTRY}" -u "${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}"; then
+                        info "🎉 Successfully logged helm into ${DEFAULT_HELM_OCI_REPOSITORY}!"
+                        break
+                    fi
+
+                    warn "Artifactory helm login failed. Please try again."
+                    ARTIFACTORY_TOKEN=""
+                done
             fi
         else
-            info "🎉 You're already authenticated to the Artifactory helm repository!"
-
+            info "🎉 Helm is already logged into ${DEFAULT_HELM_OCI_REPOSITORY}!"
         fi
-
-        if ! helm search repo artifactory-push --fail-on-no-result -o yaml &>/dev/null; then
-            info "Adding Artifactory helm repository with push access..."
-            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-            [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-
-            if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
-                helm repo add artifactory-push https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
-            else
-                warn "Skipping adding Artifactory helm repository with push access. You'll need to add it manually or rerun this script."
-            fi
-
-        else
-            info "🎉 You're already authenticated to the Artifactory helm repository with push access!"
-        fi
-
-        helm repo update
     fi
 fi
 
