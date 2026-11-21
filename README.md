@@ -123,10 +123,59 @@ You will need to have access to your Docker, Kubernetes, and Helm credentials
 to do much of this work. The easiest way to do this is inside of the container,
 see below.
 
-### Docker Credentials
+### Connecting with an AI agent
 
-Visual Studio Code now correctly sets up Docker credentials when
-inside a devcontainer.
+`adp-connect` sets up your access to Rancher (Kubernetes), Artifactory, Argo CD,
+and GitHub. If you use an AI coding agent, you can ask it to help, for example:
+
+> Read https://github.com/ohioit/vscode-devcontainer-base and help me connect to ADP.
+
+The agent will install the tools, check what's already set up, and then ask
+**you** to run one command in your own terminal. That's because signing in needs
+your browser and prompts that only you should answer. When it's done, the agent
+checks again to confirm everything works.
+
+- The agent may suggest `adp-connect -a`. Use it if you follow common Ohio IT
+  practices, and ask someone if you're not sure. It also sets up Artifactory and
+  Argo CD, which need access that may have to be granted before they work.
+- Never paste tokens or passwords into the chat. Type them only into the
+  `adp-connect` prompts.
+- If you've added servers of your own, the agent may tell you they're
+  unreachable. That's usually not a problem with your Ohio setup.
+- If `adp-connect` itself seems broken, the agent can help you draft an
+  [issue](https://github.com/ohioit/vscode-devcontainer-base/issues/new?template=adp-connect.yml).
+  It removes credentials and personal details first, and you review and submit it.
+
+### Docker and Helm Registry Credentials
+
+The container copies your host's Docker and Helm registry logins on startup, so `docker` and
+`helm` work the same whether or not Visual Studio Code is attached (for example when the
+container is started with the devcontainer CLI):
+
+- Docker logins from your host's `~/.docker/config.json` go into
+  `${DOCKER_CONFIG}/config.json`. The image sets `DOCKER_CONFIG=/home/vscode/.config/docker`.
+- Helm's registry config (`~/.config/helm/registry/config.json`) gets your host's Docker logins
+  plus its Helm logins (`~/.config/helm/registry/config.json`, or
+  `~/Library/Preferences/helm/registry/config.json` on Mac OS). Where both have the same
+  registry, the Helm login wins.
+
+Only logins stored directly in those files carry over. Logins kept in a keychain can't be read
+from the container, so they're left out and listed when the container starts. This includes
+Docker Desktop's default on Mac OS and Windows, and `helm registry login` on Mac OS. In that
+case, log in once inside the container with the same Artifactory Identity Token:
+
+```bash
+docker login docker.artifactory.oit.ohio.edu --username=${YOUR_OHIO_ID}
+```
+
+That login lasts until the container is set up again. Nothing else from your host's Docker
+config (contexts, plugins, proxies) is copied.
+
+Visual Studio Code's own Docker credential forwarding isn't used. When it connects, the Dev
+Containers extension still points `credsStore` in `~/.docker/config.json` at its
+`docker-credential-dev-containers-<id>` helper, which forwards lookups to your host's Docker
+logins. But that only works while Visual Studio Code is connected, and with `DOCKER_CONFIG` set
+elsewhere nothing reads that file.
 
 ### Kubernetes credentials
 
@@ -143,35 +192,41 @@ one, you can do the following:
 
 ### Helm Credentials
 
-In order for Helm to be able to access your private docker registry inside of the container,
-you'll need to be sure you've done a `helm repo add` for any private registry on your host
-first, you can do that with:
+Ohio charts are served from the OCI repository `oci://docker.artifactory.oit.ohio.edu/charts`,
+so Helm only needs to be logged into that registry; no `helm repo add` is needed. Helm checks
+its own registry login first and then falls back to Docker's, so your Artifactory Docker login
+is normally all it needs. `adp-connect -a` on your host sets this up (it also removes the old
+`artifactory` and `artifactory-push` repositories), and only logs Helm in separately when
+Docker isn't available. To do it by hand on your host, use an Artifactory Identity Token, not
+your Ohio password, with either command:
 
 ```bash
-helm repo add artifactory ${REGISTRY_URL} --username=${YOUR_OHIO_ID}
+docker login docker.artifactory.oit.ohio.edu --username=${YOUR_OHIO_ID}
+helm registry login docker.artifactory.oit.ohio.edu --username=${YOUR_OHIO_ID}
 ```
 
-Your password must be an API key or personal access token, not your Ohio password. Note
-that these do not currently work in Codespaces. Once you have this done inside of the
-container, you will need to copy this file out of the container onto your system.
+See [Docker and Helm Registry Credentials](#docker-and-helm-registry-credentials) for how
+these reach the container. These do not currently work in Codespaces.
+
+#### Classic (non-OCI) Helm repositories
+
+If you use classic Helm repositories, add them on your host with `helm repo add`; the
+container copies your host's `repositories.yaml` on startup. It then adds any classic
+repositories that project `Chart.yaml` dependencies need and that aren't already configured.
+
+If you added repositories inside the container instead, copy the file out to your host.
 
 > NOTE: The below commands will erase any configured helm repositories on your host. If
-> you have some, you should run the above command on your host instead.
+> you have some, run `helm repo add` on your host instead.
 
-To keep Ohio-specific repositories separate, optionally place them in a
-`repositories-ohio.yaml` file beside `repositories.yaml` on your host. Container startup
-merges its repositories with `repositories.yaml` before it adds repositories inferred from
-project `Chart.yaml` dependencies. Existing repositories from either file are not replaced
-by those inferred dependencies.
-
-#### Linux/Windows
+##### Linux/Windows
 
 ```bash
 test -d "${HOST_HOME}"/.config/helm || mkdir -p "${HOST_HOME}"/.config/helm
 cp ~/.config/helm/repositories.yaml "${HOST_HOME}/.config/helm/repositories.yaml
 ```
 
-#### Mac OS
+##### Mac OS
 
 ```bash
 test -d "${HOST_HOME}"/Library/Preferences/helm || mkdir -p "${HOST_HOME}"/Library/Preferences/helm

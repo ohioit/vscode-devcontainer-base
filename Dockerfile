@@ -72,6 +72,7 @@ ARG KUBECTL_VERSION=1.36.6
 ARG HELM_VERSION=4.3.1
 ARG KUBESEAL_VERSION=0.41.2
 ARG K9S_VERSION=0.51.0
+ARG YQ_VERSION=4.54.3
 
 COPY install-system-dependencies.sh /usr/local/bin/install-system-dependencies
 RUN chmod +x /usr/local/bin/install-system-dependencies && \
@@ -95,14 +96,22 @@ USER 0
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint
 COPY wait-for-death.sh /usr/local/bin/wait-for-death
 COPY setup-container.sh /usr/local/bin/setup-container
+COPY sync-registry-credentials.sh /usr/local/bin/sync-registry-credentials
 
 RUN chmod u+rwx,g+rx,o+rx \
         /usr/local/bin/setup-container \
+        /usr/local/bin/sync-registry-credentials \
         /usr/local/bin/docker-entrypoint \
         /usr/local/bin/wait-for-death && \
-    mkdir /home/vscode/.docker /home/vscode/.kube && \
-    chown ${USER_UID}:${USER_GID} /home/vscode/.docker /home/vscode/.kube && \
+    mkdir -p /home/vscode/.docker /home/vscode/.config/docker /home/vscode/.kube && \
+    chown ${USER_UID}:${USER_GID} /home/vscode/.docker /home/vscode/.config /home/vscode/.config/docker /home/vscode/.kube && \
     mkdir -p /usr/local/lib/devcontainer/hooks.d/pre-start && \
     mkdir -p /usr/local/lib/devcontainer/hooks.d/post-start
+
+# Docker reads its config (and registry logins) from here rather than
+# ~/.docker, which VS Code's Dev Containers extension rewrites to forward
+# credentials only while it's attached. setup-container fills this from the
+# host so Docker and Helm work the same with or without VS Code.
+ENV DOCKER_CONFIG=/home/vscode/.config/docker
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint"]

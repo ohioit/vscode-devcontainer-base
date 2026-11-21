@@ -36,3 +36,18 @@ curl -Lo /tmp/ohio-pkgs/k9s.tar.gz https://github.com/derailed/k9s/releases/down
     tar -C /tmp/ohio-pkgs -zxvf /tmp/ohio-pkgs/k9s.tar.gz && \
     install -m 755 /tmp/ohio-pkgs/k9s /usr/local/bin/k9s && \
     rm -Rf /tmp/ohio-pkgs/*
+
+echo "Installing yq ${YQ_VERSION}..."
+# mikefarah/yq (Go), which setup-container.sh and adp-connect expect.
+YQ_BINARY="yq_linux_${DPKG_ARCHITECTURE}"
+YQ_RELEASE_URL="https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}"
+curl -fLo /tmp/ohio-pkgs/"${YQ_BINARY}" "${YQ_RELEASE_URL}/${YQ_BINARY}"
+curl -fsSLo /tmp/ohio-pkgs/yq-checksums "${YQ_RELEASE_URL}/checksums"
+curl -fsSLo /tmp/ohio-pkgs/yq-checksums-order "${YQ_RELEASE_URL}/checksums_hashes_order"
+# Each checksums line is "<file> <hash>...", in the order checksums_hashes_order lists.
+YQ_SHA256_FIELD=$(( $(grep -n '^SHA-256$' /tmp/ohio-pkgs/yq-checksums-order | cut -d: -f1) + 1 ))
+awk -v file="${YQ_BINARY}" -v field="${YQ_SHA256_FIELD}" '$1 == file { print $field "  " file }' \
+    /tmp/ohio-pkgs/yq-checksums > /tmp/ohio-pkgs/yq.sha256sum
+(cd /tmp/ohio-pkgs && sha256sum --check yq.sha256sum)
+install -m 755 /tmp/ohio-pkgs/"${YQ_BINARY}" /usr/local/bin/yq
+rm -Rf /tmp/ohio-pkgs/*

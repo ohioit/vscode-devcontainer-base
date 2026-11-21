@@ -1,4 +1,70 @@
 #!/usr/bin/env bash
+# ==============================================================================
+# adp-connect: sets up a developer workstation for Ohio University's ADP
+# services (Rancher/Kubernetes, Artifactory, Argo CD and GitHub).
+#
+# NOTES FOR AI AGENTS / LLM ASSISTANTS
+# ------------------------------------
+# A user may ask you to "connect me to ADP" or "set up adp-connect". Read this
+# block, and the "Connecting a user with adp-connect" section of AGENTS.md in
+# https://github.com/ohioit/vscode-devcontainer-base, before doing anything.
+#
+# 1. YOU MUST NOT RUN THE SETUP YOURSELF. It needs an interactive terminal
+#    (prompts, a password field) and a web browser (SSO sign-ins). Your shell
+#    has neither. The only invocations you may run yourself are:
+#      adp-connect -D -I     Install/update the CLI tools only. No prompts.
+#      adp-connect -C [-a]   Read-only status check. No prompts, prints no
+#                            secrets. Ends with "NEXT:" and "RESULT:" lines.
+#    Running anything else without a terminal exits with code 2 and changes
+#    nothing.
+#
+# 2. Procedure:
+#    a. If `adp-connect` is not on PATH, install it (Windows users: inside WSL):
+#         mkdir -p ~/.local/bin && curl -fsSL \
+#           https://raw.githubusercontent.com/ohioit/vscode-devcontainer-base/refs/heads/main/adp-connect.sh \
+#           -o ~/.local/bin/adp-connect && chmod +x ~/.local/bin/adp-connect
+#       then run `adp-connect -D -I` to install the tools.
+#    b. Run `adp-connect -C -a` and read the result.
+#    c. Ask the user whether they want a short explanation of the services:
+#         Rancher     - the user interface for Kubernetes; how you get cluster access.
+#         Artifactory - where your build artifacts are stored (container
+#                       images, Helm charts, packages).
+#         Argo CD     - what deploys your stuff to Kubernetes.
+#         GitHub      - where your code and your deployment/release workflows live.
+#    d. Tell the user to run, in their own terminal (not through you):
+#         adp-connect -a   if they follow common Ohio IT practices (ask
+#                          someone if in doubt). This also sets up Artifactory
+#                          and Argo CD, which need access that may have to be
+#                          granted first.
+#         adp-connect      otherwise (Rancher, Kubernetes and GitHub only).
+#       Tell them to expect prompts and browser sign-ins, and to come back
+#       when it finishes.
+#    e. Run `adp-connect -C` (with `-a` if they used it) again to confirm.
+#    Do not offer users other flags; `adp-connect -h` lists them if needed.
+#
+# 3. Reading results. "Expected services" are hosts on .ohio.edu plus the
+#    public services this script configures by default (github.com). They
+#    should work. Any other host is something the user added themselves and
+#    this project knows nothing about. If only those fail, tell the user
+#    their expected services are fine and the failures may not be a real
+#    problem. Don't troubleshoot them unless the user asks.
+#
+# 4. Credentials. Never ask the user to paste tokens or passwords into chat.
+#    Never pass credentials as arguments or environment variables. Never print
+#    credential files (~/.kube/config, ~/.rancher/cli2.json,
+#    ~/.docker/config.json, ~/.config/gh/hosts.yml, the Argo CD config).
+#    Never suggest -T (trace output contains secrets).
+#
+# 5. Troubleshooting and bug reports: see AGENTS.md. Only ever change the
+#    user's own machine, never a connected service. Bugs go to
+#    https://github.com/ohioit/vscode-devcontainer-base/issues; the user
+#    files the issue after reviewing your sanitized draft.
+#
+# Exit codes: 0 ok; 1 error, or some services could not be set up (listed in
+# the final summary); 2 needs an interactive terminal; 3 (-C) something is
+# missing or expired, so rerun the NEXT command; 4 (-C) only unreachable
+# hosts, so rerunning will not help (check the network/VPN).
+# ==============================================================================
 HAVE_GUM="$(which gum &>/dev/null && echo 'true')"
 TEMP_DIR=$(mktemp -d)
 SCRIPT_SOURCE_BRANCH="${SCRIPT_SOURCE_BRANCH:-main}"
@@ -17,6 +83,12 @@ DEFAULT_RANCHER_HOSTNAME="rancher.oit.ohio.edu"
 DEFAULT_RANCHER_AUTH_PROVIDER="azureADProvider"
 DEFAULT_ARTIFACTORY_HOSTNAME="artifactory.oit.ohio.edu"
 DEFAULT_ARGOCD_HOSTNAME="argo.ops.kube.ohio.edu"
+DEFAULT_HELM_OCI_REGISTRY="docker.${DEFAULT_ARTIFACTORY_HOSTNAME}"
+DEFAULT_HELM_OCI_REPOSITORY="oci://${DEFAULT_HELM_OCI_REGISTRY}/charts"
+# Classic (non-OCI) Artifactory Helm repositories added by older versions of
+# this script. They are removed in favor of DEFAULT_HELM_OCI_REPOSITORY.
+LEGACY_HELM_REPOSITORIES=("artifactory" "artifactory-push")
+NEEDED_HELM_MAJOR_VERSION=4
 DEFAULT_GITHUB_SERVERS=("github.ohio.edu" "github.com")
 KUBE_CLIENT_CONFIG_SECRET="${KUBE_CLIENT_CONFIG_SECRET:-dev-client-saved-config}"
 KUBE_CLIENT_CONFIG_CONTEXT="${KUBE_CLIENT_CONFIG_CONTEXT:-ais-devtest}"
@@ -25,11 +97,16 @@ SEALED_SECRETS_CONTROLLER_NAMESPACE="sealed-secrets"
 SETUP_INTERNAL_SERVICES="false"
 USER_OHIOID=""
 ARTIFACTORY_TOKEN=""
+CHECK_ONLY=""
+NEEDED_RANCHER_VERSION=2.11.3
+FAILED_SERVICES=()
+ORIGINAL_ARGS=("$@")
 
 HTTP_DATA_METHODS=("POST" "PUT" "PATCH")
 MAIN_SCRIPT_PID="${BASHPID:-$$}"
 
 if [[ "${FORCE_TRACE_MODE}" = "true" ]]; then
+    echo "🚨 Trace mode is enabled. Its output contains credentials: do not share it or paste it into an AI tool or an issue." >&2
     set -x
 fi
 
@@ -251,7 +328,7 @@ version_sort() {
 call_rancher() {
     local token="$1"
     local url="$2"
-    local method="$3:-GET"
+    local method="${3:-GET}"
     local data="$4"
 
     if [[ ${HTTP_DATA_METHODS[*]} =~ $method ]]; then
@@ -263,12 +340,12 @@ call_rancher() {
     fi
 
     if [[ $RETURN -ne 0 ]]; then
-        error "❌ Error: Failed to call Rancher API at $url. Error code $RETURN."
+        error "❌ Error: Failed to call Rancher API at $url. Error code $RETURN." >&2
         return 1
     fi
 
     if [[ "$(yq -r '.type' <<< "$RESPONSE")" == "error" ]]; then
-        error "❌ $(yq -r '.message' <<< "$RESPONSE")"
+        error "❌ $(yq -r '.message' <<< "$RESPONSE")" >&2
         return 1
     fi
 
@@ -412,6 +489,59 @@ should_install() {
     return 0
 }
 
+# Prints the major version of the installed helm (e.g. "3"), or nothing.
+helm_major_version() {
+    local version
+    version="$(helm version --template '{{.Version}}' 2>/dev/null)"
+    version="${version#v}"
+    echo "${version%%.*}"
+}
+
+# Returns 0 if helm needs to be installed or upgraded to Helm ${NEEDED_HELM_MAJOR_VERSION}.
+should_install_helm() {
+    local major
+
+    should_install "helm" && return 0
+
+    major="$(helm_major_version)"
+    if [[ -z "${major}" ]] || (( 10#${major} < NEEDED_HELM_MAJOR_VERSION )); then
+        debug "⬆️  helm ${major:-unknown} is older than ${NEEDED_HELM_MAJOR_VERSION}, upgrading."
+        return 0
+    fi
+
+    return 1
+}
+
+# Returns 0 if the JSON registry config $1 has a login entry for registry $2.
+registry_config_has_login() {
+    [[ -f "$1" ]] || return 1
+    [[ "$(yq -p json -r '(.auths // {} | has("'"$2"'")) or (.credHelpers // {} | has("'"$2"'"))' "$1" 2>/dev/null)" = "true" ]]
+}
+
+# Prints where helm gets credentials for the given OCI registry host: "helm"
+# (its own registry config), "docker" (helm falls back to Docker's config, so a
+# `docker login` is enough) or nothing. Only checks the configs; never prints them.
+helm_registry_login_source() {
+    local registry="$1"
+
+    if registry_config_has_login "$(helm env HELM_REGISTRY_CONFIG 2>/dev/null)" "${registry}"; then
+        echo "helm"
+    elif registry_config_has_login "${DOCKER_CONFIG:-$HOME/.docker}/config.json" "${registry}"; then
+        echo "docker"
+    fi
+}
+
+# Prints the names of legacy Artifactory Helm repositories that are still configured.
+legacy_helm_repositories() {
+    local repo
+
+    for repo in "${LEGACY_HELM_REPOSITORIES[@]}"; do
+        if helm repo list -o yaml 2>/dev/null | yq -r '.[].name' 2>/dev/null | grep -qx "${repo}"; then
+            echo "${repo}"
+        fi
+    done
+}
+
 is_in_array() {
     local needle="$1"
     shift
@@ -430,11 +560,638 @@ rancher_current_server() {
     yq -r '.CurrentServer' < "$HOME/.rancher/cli2.json"
 }
 
+# Print the Rancher CLI configuration with credentials masked, for debug output.
+print_rancher_config_redacted() {
+    yq '(.. | select(key == "accessKey" or key == "secretKey" or key == "tokenKey")) = "REDACTED"' \
+        "$HOME/.rancher/cli2.json"
+}
+
+# Pick the login provider for a Rancher server from the providers it has
+# enabled (a public, unauthenticated endpoint), so users don't have to choose:
+#   1. DEFAULT_RANCHER_AUTH_PROVIDER, if the server offers it;
+#   2. otherwise its only single sign-on provider, if it has exactly one;
+#   3. otherwise the local provider, if that's all it offers.
+# Prints nothing when it can't decide, and the Rancher CLI then asks.
+rancher_auth_provider() {
+    local host="$1"
+    local providers sso_providers
+
+    providers=$(with_spinner "Checking how to sign in to ${host}..." \
+        curl -s --connect-timeout 5 --max-time 10 -H "Accept: application/json" \
+        "https://${host}/v3-public/authProviders" 2>/dev/null | \
+        yq -p json -o json -r '.data[].type' 2>/dev/null | grep -E '^[A-Za-z]+Provider$')
+
+    if [[ -z "${providers}" ]]; then
+        # Couldn't ask the server; fall back to the default for the default server only.
+        if [[ "${host}" = "${DEFAULT_RANCHER_HOSTNAME}" ]]; then
+            printf '%s' "${DEFAULT_RANCHER_AUTH_PROVIDER}"
+        fi
+        return 0
+    fi
+
+    if [[ -n "${DEFAULT_RANCHER_AUTH_PROVIDER}" ]] && printf '%s\n' "${providers}" | grep -qxF "${DEFAULT_RANCHER_AUTH_PROVIDER}"; then
+        printf '%s' "${DEFAULT_RANCHER_AUTH_PROVIDER}"
+        return 0
+    fi
+
+    sso_providers=$(printf '%s\n' "${providers}" | grep -vx 'localProvider')
+    if [[ -n "${sso_providers}" ]] && [[ "$(printf '%s\n' "${sso_providers}" | wc -l | tr -d ' ')" = "1" ]]; then
+        printf '%s' "${sso_providers}"
+    elif [[ -z "${sso_providers}" ]]; then
+        printf '%s' "localProvider"
+    fi
+}
+
+RANCHER_CONFIG_BACKED_UP=""
+RANCHER_CONFIG_BACKUPS_TO_KEEP=3
+
+# Copy the Rancher CLI config aside once per run before this script changes it.
+backup_rancher_config() {
+    local backup
+
+    if [[ -n "${RANCHER_CONFIG_BACKED_UP}" ]] || ! [[ -f "$HOME/.rancher/cli2.json" ]]; then
+        return 0
+    fi
+
+    backup="$HOME/.rancher/cli2.json.adp-connect-backup.$(date +%Y%m%d%H%M%S)"
+    cp -p "$HOME/.rancher/cli2.json" "${backup}" && chmod 600 "${backup}" && RANCHER_CONFIG_BACKED_UP="${backup}"
+    info "Backed up your Rancher CLI configuration to ${backup}."
+
+    # Keep only the newest few backups. The timestamp suffix sorts chronologically.
+    find "$HOME/.rancher" -maxdepth 1 -name 'cli2.json.adp-connect-backup.*' -type f 2>/dev/null | sort -r | \
+        tail -n +$((RANCHER_CONFIG_BACKUPS_TO_KEEP + 1)) | while IFS= read -r old_backup; do
+            rm -f "${old_backup}"
+        done
+}
+
+# Returns 0 if the Rancher CLI config file is readable JSON with a Servers map.
+rancher_config_parses() {
+    [[ "$(yq -p json -o json -r '.Servers | type' "$HOME/.rancher/cli2.json" 2>/dev/null)" = "!!map" ]]
+}
+
+# Prints why the saved Rancher CLI entry for a server can't be used, or nothing
+# if it looks complete. Never prints the values themselves.
+rancher_entry_problem() {
+    local server="$1"
+    local config="$HOME/.rancher/cli2.json"
+    local entry_url entry_token entry_project
+
+    if ! rancher_config_parses; then
+        echo "the Rancher CLI configuration file can't be parsed"
+        return
+    fi
+
+    if [[ "$(yq -p json -o json -r '.Servers["'"${server}"'"] | type' "${config}" 2>/dev/null)" != "!!map" ]]; then
+        echo "its entry is missing or not a valid object"
+        return
+    fi
+
+    entry_url=$(yq -p json -o json -r '.Servers["'"${server}"'"].url // ""' "${config}" 2>/dev/null)
+    entry_token=$(yq -p json -o json -r '.Servers["'"${server}"'"].tokenKey // ""' "${config}" 2>/dev/null)
+    entry_project=$(yq -p json -o json -r '.Servers["'"${server}"'"].project // ""' "${config}" 2>/dev/null)
+
+    if ! [[ "${entry_url}" =~ ^https?://[^/]+ ]]; then
+        echo "its entry has no valid URL"
+    elif [[ -z "${entry_token}" ]]; then
+        echo "its entry has no saved token"
+    elif ! [[ "${entry_project}" =~ ^[a-z0-9-]+:[a-z0-9-]+$ ]]; then
+        echo "its entry has no valid project (context)"
+    fi
+
+    entry_token=""
+}
+
+# Remove one server's entry from the Rancher CLI config (after a backup).
+remove_rancher_entry() {
+    local server="$1"
+
+    backup_rancher_config
+    if ! rancher server delete "${server}" &>/dev/null; then
+        yq -i -p json -o json 'del(.Servers["'"${server}"'"])' "$HOME/.rancher/cli2.json"
+    fi
+}
+
+# Run a command with a spinner so slow network calls don't look like a hang.
+# Exit code and stdout pass through. Without gum or a terminal it just runs.
+with_spinner() {
+    local title="$1"
+    shift
+
+    if [[ "${HAVE_GUM}" ]] && [ -t 2 ]; then
+        gum spin --show-error --title="${title}" -- "$@"
+    else
+        "$@"
+    fi
+}
+
+# Returns 0 if https://<host><path> answers at all (any HTTP status), showing
+# a spinner meanwhile.
+host_reachable() {
+    local rc
+
+    with_spinner "Checking whether $1 can be reached..." \
+        curl -s -o /dev/null --connect-timeout 5 --max-time 10 "https://$1$2"
+    rc=$?
+
+    [[ ${rc} -ne 6 ]] && [[ ${rc} -ne 7 ]] && [[ ${rc} -ne 28 ]] && [[ ${rc} -ne 35 ]]
+}
+
+rancher_host_reachable() {
+    host_reachable "$1" "/ping"
+}
+
+# Ask whether to retry servers that couldn't be reached. Returns 0 to retry.
+ask_retry_unreachable() {
+    local kind="$1"
+    shift
+
+    warn "Couldn't reach these ${kind} servers: $*"
+    [[ "$(gum choose --header="Some servers may only be reachable on a specific VPN. Connect to it first if you need them." \
+        "Try again" "Continue without them")" = "Try again" ]]
+}
+
+# Sign in to one GitHub server.
+# Returns 0 if signed in, 1 if sign-in failed, 2 if it couldn't be reached.
+github_login() {
+    local host="$1"
+
+    if ! host_reachable "${host}"; then
+        return 2
+    fi
+
+    # shellcheck disable=SC2016
+    if with_spinner "Checking your sign-in to ${host}..." \
+        sh -c 'gh auth status --hostname="$1" > /dev/null 2>&1' _ "${host}"; then
+        info "🎉 You're already authenticated to ${host}!"
+        return 0
+    fi
+
+    info "🔐 Authenticating to ${host}..."
+    if gh auth login --hostname="${host}" --web; then
+        info "🎉 You're successfully authenticated to ${host}!"
+        return 0
+    fi
+
+    record_failure "GitHub ${host}: login failed."
+    return 1
+}
+
+# Validate one configured Rancher server, logging in again if needed.
+# Returns 0 if usable, 1 if it failed, 2 if it couldn't be reached.
+validate_rancher_server() {
+    local server="$1"
+    local entry_problem
+
+    if ! rancher_host_reachable "${server}"; then
+        return 2
+    fi
+
+    entry_problem=$(rancher_entry_problem "${server}")
+    if [[ -n "${entry_problem}" ]]; then
+        warn "🚨 The saved Rancher configuration for ${server} is broken (${entry_problem}). Logging in again."
+        remove_rancher_entry "${server}"
+
+        if ! rancher_login "${server}"; then
+            record_failure "Rancher ${server}: its saved configuration was broken and logging in again failed. Skipping."
+            return 1
+        fi
+    fi
+
+    if ! rancher server switch "${server}" 2> >(grep -v "Saving config" >&2) >/dev/null; then
+        record_failure "Rancher ${server}: could not switch to this server. Skipping."
+        return 1
+    fi
+
+    if ! with_spinner "Checking ${server}..." rancher project list >/dev/null; then
+        yq -i '.Servers["'"${server}"'"].project = ""' "$HOME/.rancher/cli2.json"
+
+        # Only keep the server for the rest of the setup if logging in again
+        # actually worked, otherwise kubeconfig generation would use it.
+        if ! rancher_login "${server}" || \
+           ! rancher server switch "${server}" 2> >(grep -v "Saving config" >&2) >/dev/null || \
+           ! with_spinner "Checking ${server}..." rancher project list >/dev/null; then
+            record_failure "Rancher ${server}: login failed. Skipping."
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# Let the user pick their default Rancher server. Servers skipped earlier in
+# this run are still listed, so nobody wonders where they went, but picking one
+# explains why it can't be used instead of hanging on it.
+select_default_rancher_server() {
+    local server choice
+    local -a options
+
+    options=()
+    for server in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
+        if is_in_array "${server}" "${REACHABLE_RANCHER_SERVERS[@]}"; then
+            options+=("${server}")
+        else
+            options+=("${server} (skipped: not reachable)")
+        fi
+    done
+
+    while true; do
+        choice=$(printf '%s\n' "${options[@]}" | gum choose --select-if-one --header="Select your default Rancher server:")
+
+        if [[ -z "${choice}" ]]; then
+            continue
+        fi
+
+        if [[ "${choice}" == *" (skipped: not reachable)" ]]; then
+            warn "${choice%" (skipped: not reachable)"} couldn't be reached earlier in this run, so it can't be your default right now. \
+If it needs a VPN, connect to it and run adp-connect again. Otherwise, pick another server."
+            continue
+        fi
+
+        with_spinner "Switching to ${choice}..." rancher server switch "${choice}" 2> >(grep -v "Saving config" >&2) >/dev/null
+        return $?
+    done
+}
+
+# Rancher servers that don't put tokens in kubeconfigs generate kubeconfig users
+# that run `rancher token --server=<server> --user=<cluster name>` as a credential
+# plugin. The Rancher CLI caches that credential under "<user>_<cluster>[_<provider>]",
+# so the plugin's key ("<cluster name>_") never matches the one rancher_login uses
+# ("<OS user>__<provider>"). That means a second sign-in, and two credentials that
+# expire and refresh separately. Point the plugin at the same user and provider
+# rancher_login uses, so one credential per server serves both and is refreshed
+# in one place. Entries that don't look like what Rancher generates are left
+# alone with a warning.
+align_rancher_exec_users() {
+    local kubeconfig="$1"
+    local server="$2"
+    local provider="$3"
+    local exec_user exec_args expected_args new_args
+
+    for exec_user in $(yq -r '.users[] | select((.user.exec.command // "") | test("(^|/)rancher$")) | .name' "${kubeconfig}"); do
+        exec_args=$(U="${exec_user}" yq -o json -I0 '.users[] | select(.name == strenv(U)) | .user.exec.args // []' "${kubeconfig}")
+        expected_args=$(S="${server}" U="${exec_user}" yq -n -o json -I0 '["token", "--server=" + strenv(S), "--user=" + strenv(U)]')
+
+        if [[ "${exec_args}" != "${expected_args}" ]]; then
+            warn "The kubeconfig user ${exec_user} from ${server} signs in with unexpected Rancher CLI arguments, so it was left as-is. You may be asked to sign in again when you use it."
+            continue
+        fi
+
+        new_args=$(S="${server}" W="$(whoami)" P="${provider}" yq -n -o json -I0 \
+            '["token", "--server=" + strenv(S), "--user=" + strenv(W)] + (if strenv(P) == "" then [] else ["--auth-provider=" + strenv(P)] end)')
+        U="${exec_user}" A="${new_args}" yq -i '(.users[] | select(.name == strenv(U)) | .user.exec.args) = (strenv(A) | from_json)' "${kubeconfig}"
+        debug "Pointed kubeconfig user ${exec_user} at the Rancher CLI login for ${server}."
+    done
+}
+
+# Record a service that could not be set up so the run can continue and the
+# failure can be listed in the final summary.
+record_failure() {
+    warn "⚠️  $1"
+    FAILED_SERVICES+=("$1")
+}
+
+# ------------------------------------------------------------------------------
+# Status check (-C). Read-only, needs no terminal, and must never print
+# credentials, usernames, emails or file contents. Every host is treated the
+# same way.
+# ------------------------------------------------------------------------------
+STATUS_NEEDS_RERUN="false"
+STATUS_UNREACHABLE="false"
+
+status_line() {
+    local key="$1"
+    local status="$2"
+
+    printf '%-60s %s\n' "${key}:" "${status}"
+
+    case "${status}" in
+        missing*|expired*) STATUS_NEEDS_RERUN="true" ;;
+        unreachable*) STATUS_UNREACHABLE="true" ;;
+    esac
+}
+
+# Print-only variant for informational lines that must not affect the result.
+status_info() {
+    printf '%-60s %s\n' "$1:" "$2"
+}
+
+# Returns 0 if https://<host> answers at all (any HTTP status), 1 otherwise.
+status_host_reachable() {
+    local url="$1"
+    local rc
+
+    curl -s -o /dev/null --connect-timeout 5 --max-time 10 "${url}"
+    rc=$?
+
+    [[ ${rc} -ne 6 ]] && [[ ${rc} -ne 7 ]] && [[ ${rc} -ne 28 ]] && [[ ${rc} -ne 35 ]]
+}
+
+# Classify a failed command's stderr as an auth problem or a network problem.
+status_classify_error() {
+    if printf '%s' "$1" | grep -qiE 'unauthori[sz]ed|unauthenticated|forbidden|401|403|expired|invalid session|credentials|token'; then
+        echo "expired"
+    else
+        echo "unreachable"
+    fi
+}
+
+script_checksum() {
+    if ! [[ -f "$0" ]]; then
+        echo "unknown"
+    elif which sha256sum &>/dev/null; then
+        sha256sum "$0" | awk '{ print $1 }'
+    elif which shasum &>/dev/null; then
+        shasum -a 256 "$0" | awk '{ print $1 }'
+    else
+        echo "unknown"
+    fi
+}
+
+run_status_check() {
+    local tool server token http_code output rc host context cluster
+    local next_command="adp-connect"
+    local repo line
+    local -a rancher_servers github_servers contexts argocd_lines
+
+    if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
+        next_command="adp-connect -a"
+    fi
+
+    echo "[environment]"
+    status_info "os" "${LOCAL_OS}/$(uname -m)"
+    status_info "shell" "$(basename "${SHELL:-unknown}")"
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        status_info "wsl" "yes"
+    else
+        status_info "wsl" "no"
+    fi
+    if printf '%s' ":${PATH}:" | grep -q ":${HOME}/.local/bin:"; then
+        status_info "path.local_bin" "ok"
+    else
+        status_line "path.local_bin" "missing (add \$HOME/.local/bin to PATH)"
+    fi
+    if ! which yq &>/dev/null; then
+        status_line "yq" "missing"
+    elif yq --version 2>/dev/null | grep -q mikefarah; then
+        status_info "yq" "ok"
+    else
+        status_line "yq" "missing (an incompatible yq is installed; remove it)"
+    fi
+    if which rancher &>/dev/null; then
+        compare_versions "$(rancher --version | awk '{ print $3 }')" "${NEEDED_RANCHER_VERSION}"
+        if [[ "$?" = "2" ]]; then
+            status_line "rancher.version" "expired (older than ${NEEDED_RANCHER_VERSION}; a rerun upgrades it)"
+        else
+            status_info "rancher.version" "ok"
+        fi
+    fi
+    if which helm &>/dev/null; then
+        if [[ "$(helm_major_version)" -ge "${NEEDED_HELM_MAJOR_VERSION}" ]] 2>/dev/null; then
+            status_info "helm.version" "ok"
+        else
+            status_line "helm.version" "expired (older than Helm ${NEEDED_HELM_MAJOR_VERSION}; a rerun upgrades it)"
+        fi
+    fi
+    if ! which docker &>/dev/null; then
+        status_info "docker" "not installed"
+    elif docker ps &>/dev/null; then
+        status_info "docker" "running"
+    else
+        status_info "docker" "not running or not accessible"
+    fi
+    if which xdg-open &>/dev/null || which open &>/dev/null; then
+        status_info "browser_opener" "ok"
+    else
+        status_info "browser_opener" "missing (browser sign-ins must be done by copying URLs)"
+    fi
+    if status_host_reachable "https://${DEFAULT_RANCHER_HOSTNAME}/ping"; then
+        status_info "network.${DEFAULT_RANCHER_HOSTNAME}" "ok"
+    else
+        status_line "network.${DEFAULT_RANCHER_HOSTNAME}" "unreachable (check VPN/network)"
+    fi
+    status_info "adp-connect.sha256" "$(script_checksum)"
+
+    echo
+    echo "[services]"
+    for tool in gum yq rancher kubectl kubeseal helm skaffold gh; do
+        if which "${tool}" &>/dev/null; then
+            status_info "tool.${tool}" "ok"
+        else
+            status_line "tool.${tool}" "missing"
+        fi
+    done
+    if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
+        if which argocd &>/dev/null; then
+            status_info "tool.argocd" "ok"
+        else
+            status_line "tool.argocd" "missing"
+        fi
+    fi
+
+    # Rancher
+    rancher_servers=()
+    if [[ -f "$HOME/.rancher/cli2.json" ]] && which yq &>/dev/null && ! rancher_config_parses; then
+        status_line "rancher.config" "missing (the Rancher CLI config can't be parsed; a rerun backs it up and starts over)"
+    elif [[ -f "$HOME/.rancher/cli2.json" ]] && which yq &>/dev/null; then
+        while IFS= read -r server; do
+            [[ -n "${server}" ]] && rancher_servers+=("${server}")
+        done < <(yq -r '.Servers | to_entries[] | .key' "$HOME/.rancher/cli2.json" 2>/dev/null | grep -v rancherDefault)
+    fi
+
+    if [[ ${#rancher_servers[@]} -eq 0 ]]; then
+        status_line "rancher" "missing (no Rancher servers configured)"
+    fi
+
+    for server in "${rancher_servers[@]}"; do
+        output=$(rancher_entry_problem "${server}")
+        if [[ -n "${output}" ]]; then
+            status_line "rancher.${server}" "missing (saved config is broken: ${output}; a rerun repairs it)"
+            continue
+        fi
+
+        if ! status_host_reachable "https://${server}/ping"; then
+            status_line "rancher.${server}" "unreachable"
+            continue
+        fi
+
+        token=$(yq -r '.Servers["'"${server}"'"].tokenKey // ""' "$HOME/.rancher/cli2.json" 2>/dev/null)
+
+        # Pass the token on stdin so it never appears in the process list.
+        http_code=$(printf 'Authorization: Bearer %s\n' "${token}" | \
+            curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+                -H @- -H "Accept: application/json" "https://${server}/v3/users?me=true")
+        token=""
+
+        case "${http_code}" in
+            2*) status_line "rancher.${server}" "ok" ;;
+            401|403) status_line "rancher.${server}" "expired" ;;
+            *) status_line "rancher.${server}" "unreachable (HTTP ${http_code})" ;;
+        esac
+    done
+
+    # Kubernetes. `kubectl config view` redacts credentials by default.
+    if which kubectl &>/dev/null && [[ -f "$HOME/.kube/config" ]]; then
+        contexts=()
+        while IFS= read -r context; do
+            [[ -n "${context}" ]] && contexts+=("${context}")
+        done < <(command kubectl config get-contexts -o name 2>/dev/null)
+
+        if [[ ${#contexts[@]} -eq 0 ]]; then
+            status_line "kubernetes" "missing (no contexts configured)"
+        fi
+
+        for context in "${contexts[@]}"; do
+            # The -fqdn contexts point at the same clusters directly; skip them like the
+            # Sealed Secrets setup does.
+            [[ "${context}" =~ -fqdn$ ]] && continue
+
+            cluster=$(command kubectl config view -o jsonpath='{.contexts[?(@.name=="'"${context}"'")].context.cluster}' 2>/dev/null)
+            host=$(command kubectl config view -o jsonpath='{.clusters[?(@.name=="'"${cluster}"'")].cluster.server}' 2>/dev/null | sed -e 's|^[a-zA-Z]*://||' -e 's|[:/].*||')
+
+            # Contexts whose credentials come from a plugin (e.g. `rancher token`) could
+            # start an interactive sign-in, which a status check must never do.
+            if [[ -n "$(command kubectl config view -o jsonpath='{.users[?(@.name=="'"$(command kubectl config view -o jsonpath='{.contexts[?(@.name=="'"${context}"'")].context.user}' 2>/dev/null)"'")].user.exec.command}' 2>/dev/null)" ]]; then
+                status_info "kubernetes.${context} (${host})" "not checked (signs in through a credential plugin)"
+                continue
+            fi
+
+            output=$(command kubectl --context="${context}" --request-timeout=5s get --raw /version 2>&1 >/dev/null)
+            rc=$?
+
+            if [[ ${rc} -eq 0 ]]; then
+                status_line "kubernetes.${context} (${host})" "ok"
+            else
+                status_line "kubernetes.${context} (${host})" "$(status_classify_error "${output}")"
+            fi
+        done
+
+        status_info "kubernetes.current_context" "$(command kubectl config current-context 2>/dev/null || echo none)"
+        if [[ -n "$(command kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null)" ]]; then
+            status_info "kubernetes.current_namespace" "$(command kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null)"
+        else
+            status_line "kubernetes.current_namespace" "missing"
+        fi
+    elif [[ -z "${SKIP_KUBECONFIG}" ]]; then
+        status_line "kubernetes" "missing (no kubeconfig)"
+    fi
+
+    # GitHub
+    github_servers=("${DEFAULT_GITHUB_SERVERS[@]}")
+    if [[ -f "$HOME/.config/gh/hosts.yml" ]] && which yq &>/dev/null; then
+        while IFS= read -r host; do
+            if [[ -n "${host}" ]] && ! is_in_array "${host}" "${github_servers[@]}"; then
+                github_servers+=("${host}")
+            fi
+        done < <(yq -r '. | keys | .[]' "$HOME/.config/gh/hosts.yml" 2>/dev/null)
+    fi
+
+    for host in "${github_servers[@]}"; do
+        if ! which gh &>/dev/null; then
+            status_line "github.${host}" "missing (gh not installed)"
+        elif ! status_host_reachable "https://${host}"; then
+            status_line "github.${host}" "unreachable"
+        elif gh auth status --hostname="${host}" &>/dev/null; then
+            status_line "github.${host}" "ok"
+        else
+            status_line "github.${host}" "missing (not signed in)"
+        fi
+    done
+
+    if git config --global --get user.name &>/dev/null; then
+        status_info "git.user.name" "set"
+    else
+        status_line "git.user.name" "missing"
+    fi
+    if git config --global --get user.email &>/dev/null; then
+        status_info "git.user.email" "set"
+    else
+        status_line "git.user.email" "missing"
+    fi
+
+    if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
+        # Artifactory: Docker registry
+        host="docker.${DEFAULT_ARTIFACTORY_HOSTNAME}"
+        if ! which docker &>/dev/null || ! docker ps &>/dev/null; then
+            status_line "artifactory.docker (${host})" "missing (docker is not installed or not running)"
+        elif ! status_host_reachable "https://${host}"; then
+            status_line "artifactory.docker (${host})" "unreachable"
+        elif docker login "${host}" <<< "" &>/dev/null; then
+            status_line "artifactory.docker (${host})" "ok"
+        else
+            status_line "artifactory.docker (${host})" "missing (not logged in)"
+        fi
+
+        # Artifactory: Helm OCI repository
+        if ! which helm &>/dev/null; then
+            status_line "artifactory.helm (${DEFAULT_HELM_OCI_REPOSITORY})" "missing (helm not installed)"
+        elif [[ "$(helm_registry_login_source "${DEFAULT_HELM_OCI_REGISTRY}")" = "helm" ]]; then
+            status_line "artifactory.helm (${DEFAULT_HELM_OCI_REPOSITORY})" "ok"
+        elif [[ "$(helm_registry_login_source "${DEFAULT_HELM_OCI_REGISTRY}")" = "docker" ]]; then
+            status_line "artifactory.helm (${DEFAULT_HELM_OCI_REPOSITORY})" "ok (uses the Docker login)"
+        else
+            status_line "artifactory.helm (${DEFAULT_HELM_OCI_REPOSITORY})" "missing (not logged in)"
+        fi
+
+        if which helm &>/dev/null; then
+            for repo in $(legacy_helm_repositories); do
+                status_line "artifactory.helm.legacy.${repo}" "expired (old non-OCI repository; a rerun removes it)"
+            done
+        fi
+
+        # Argo CD. `--argocd-context` avoids switching the user's current context.
+        if which argocd &>/dev/null; then
+            argocd_lines=()
+            # `argocd context` fails with "No local configuration found" when nothing is set up.
+            if output=$(argocd context 2>/dev/null); then
+                while IFS= read -r line; do
+                    [[ -n "${line// /}" ]] && argocd_lines+=("${line}")
+                done < <(printf '%s\n' "${output}" | grep -v '^CURRENT' | sed 's/^\*//')
+            fi
+
+            if [[ ${#argocd_lines[@]} -eq 0 ]]; then
+                status_line "argocd" "missing (no Argo CD servers configured)"
+            fi
+
+            for line in "${argocd_lines[@]}"; do
+                context=$(printf '%s' "${line}" | awk '{ print $1 }')
+                host=$(printf '%s' "${line}" | awk '{ print $2 }' | sed 's|:.*||')
+
+                output=$(argocd version --argocd-context "${context}" --grpc-web 2>&1 >/dev/null)
+                rc=$?
+
+                if [[ ${rc} -eq 0 ]]; then
+                    status_line "argocd.${context} (${host})" "ok"
+                else
+                    status_line "argocd.${context} (${host})" "$(status_classify_error "${output}")"
+                fi
+            done
+        fi
+    fi
+
+    echo
+    if [[ "${STATUS_NEEDS_RERUN}" = "true" ]]; then
+        echo "NEXT: ${next_command}"
+        echo "RESULT: action-needed"
+        return 3
+    elif [[ "${STATUS_UNREACHABLE}" = "true" ]]; then
+        echo "NEXT: none (rerunning will not help; some hosts are unreachable)"
+        echo "RESULT: unreachable-only"
+        return 4
+    fi
+
+    echo "NEXT: none"
+    echo "RESULT: ok"
+    return 0
+}
+
 rancher_login() {
     local rancher_hostname="$1"
     local rancher_token=""
     local rancher_project=""
     local current_server=""
+    local login_result=0
+    local entry_problem=""
+    local auth_provider=""
 
     debug "Logging into $rancher_hostname"
 
@@ -446,7 +1203,7 @@ rancher_login() {
     if [[ "${ENABLE_DEBUG}" = "true" ]]; then
         if [[ -f "$HOME/.rancher/cli2.json" ]]; then
             debug "Current Rancher configuration before token:"
-            yq "$HOME/.rancher/cli2.json"
+            print_rancher_config_redacted
         else
             debug "No Rancher configuration before token."
         fi
@@ -456,10 +1213,11 @@ rancher_login() {
     # shellcheck disable=SC2001
     rancher_hostname=$(printf '%s' "$rancher_hostname" | sed -e 's|^[a-zA-Z]*://||')
 
-    if [[ -e "${HOME}/.rancher/cli2.json" ]] && [[ "$(rancher server ls | grep -c "${rancher_hostname}")" -gt 1 ]]; then
+    if [[ -e "${HOME}/.rancher/cli2.json" ]] && [[ "$(rancher server ls | grep -cF "${rancher_hostname}")" -gt 1 ]]; then
         warn "🚨 Multiple Rancher servers are configured with the hostname ${rancher_hostname}. Cleaning that up."
 
-        for SERVER in $(rancher server ls | grep "${rancher_hostname}" | sed 's/^*//' | awk '{ print $1 }'); do
+        backup_rancher_config
+        for SERVER in $(rancher server ls | grep -F "${rancher_hostname}" | sed 's/^*//' | awk '{ print $1 }'); do
             rancher server delete "${SERVER}"
         done
     fi
@@ -468,8 +1226,11 @@ rancher_login() {
 (CTRL+Click on the link in most terminals) and enter the token provided. It may take a second after completing the login process for the CLI to notice and continue."
     warn "If you see a URL below that contains the string 'authProviders', ignore it."
 
-    if [[ -n "${DEFAULT_RANCHER_AUTH_PROVIDER}" ]]; then
-        rancher_token_credential=$(rancher token --server "${rancher_hostname}" --user="$(whoami)" --auth-provider="${DEFAULT_RANCHER_AUTH_PROVIDER}")
+    auth_provider=$(rancher_auth_provider "${rancher_hostname}")
+    debug "Using auth provider '${auth_provider:-<ask>}' for ${rancher_hostname}"
+
+    if [[ -n "${auth_provider}" ]]; then
+        rancher_token_credential=$(rancher token --server "${rancher_hostname}" --user="$(whoami)" --auth-provider="${auth_provider}")
     else
         rancher_token_credential=$(rancher token --server "${rancher_hostname}" --user="$(whoami)")
     fi
@@ -477,6 +1238,12 @@ rancher_login() {
     # shellcheck disable=SC2181
     if [[ "$?" -ne 0 ]]; then
         error "❌ Error: Failed to login to Rancher."
+
+        # The Rancher CLI can save an empty entry for the server even when this fails.
+        if [[ -f "$HOME/.rancher/cli2.json" ]] && [[ -n "$(rancher_entry_problem "${rancher_hostname}")" ]] && \
+           [[ "$(rancher_entry_problem "${rancher_hostname}")" != "its entry is missing or not a valid object" ]]; then
+            remove_rancher_entry "${rancher_hostname}"
+        fi
         return 1
     fi
 
@@ -488,16 +1255,26 @@ rancher_login() {
         return 1
     fi
 
+    # Reuse the previously selected project only if it is well formed and still
+    # exists; a stale or garbled value would make every login fail.
     rancher_project=""
-    if [[ -f "$HOME/.rancher/cli2.json" ]]; then
-        rancher_project=$(yq -r '.Servers."'"${rancher_hostname}"'".project' < "$HOME/.rancher/cli2.json" | grep -v null)
+    if [[ -f "$HOME/.rancher/cli2.json" ]] && rancher_config_parses; then
+        rancher_project=$(yq -p json -o json -r '.Servers["'"${rancher_hostname}"'"].project // ""' "$HOME/.rancher/cli2.json" 2>/dev/null)
     fi
 
-    if [[ -z "$rancher_project" ]]; then
-        rancher_project=$(call_rancher "$rancher_token" "https://${rancher_hostname}/v3/projects" | yq -r '.data[0].id')
-        if [[ -z "$rancher_project" ]]; then
-            error "❌ Error: Failed to find any projects in Rancher:"
-            call_rancher "$rancher_token" "https://${rancher_hostname}/v3/projects"
+    if [[ -n "${rancher_project}" ]]; then
+        if ! [[ "${rancher_project}" =~ ^[a-z0-9-]+:[a-z0-9-]+$ ]] || \
+           ! call_rancher "$rancher_token" "https://${rancher_hostname}/v3/projects/${rancher_project}" &>/dev/null; then
+            debug "Saved project ${rancher_project} is no longer usable, picking a new one."
+            rancher_project=""
+        fi
+    fi
+
+    if [[ -z "${rancher_project}" ]]; then
+        rancher_project=$(call_rancher "$rancher_token" "https://${rancher_hostname}/v3/projects" | yq -p json -o json -r '.data[0].id // ""' 2>/dev/null)
+
+        if ! [[ "${rancher_project}" =~ ^[a-z0-9-]+:[a-z0-9-]+$ ]]; then
+            error "❌ Error: Couldn't find any Rancher projects you can use on ${rancher_hostname}. If you're new, you may need to be granted access first."
             return 1
         fi
     fi
@@ -522,11 +1299,12 @@ rancher_login() {
     if [[ "${ENABLE_DEBUG}" = "true" ]]; then
         if [[ -f "$HOME/.rancher/cli2.json" ]]; then
             debug "Current Rancher Configuration before login:"
-            yq "$HOME/.rancher/cli2.json"
+            print_rancher_config_redacted
         fi
     fi
 
     rancher login --token="${rancher_token}" --context="${rancher_project}" --name="${rancher_hostname}" "https://${rancher_hostname}"
+    login_result=$?
 
     if [[ -n "${current_context}" ]]; then
         debug "Switching back to previous server ${current_server}"
@@ -541,8 +1319,20 @@ rancher_login() {
     if [[ "${ENABLE_DEBUG}" = "true" ]]; then
         if [[ -f "$HOME/.rancher/cli2.json" ]]; then
             debug "Current Rancher configuration after login:"
-            yq "$HOME/.rancher/cli2.json"
+            print_rancher_config_redacted
         fi
+    fi
+
+    if [[ ${login_result} -ne 0 ]]; then
+        error "❌ Error: The Rancher CLI could not log in to ${rancher_hostname}."
+        return 1
+    fi
+
+    # Make sure what the Rancher CLI saved is actually usable.
+    entry_problem=$(rancher_entry_problem "${rancher_hostname}")
+    if [[ -n "${entry_problem}" ]]; then
+        error "❌ Error: After logging in to ${rancher_hostname}, ${entry_problem}."
+        return 1
     fi
 }
 
@@ -563,9 +1353,9 @@ setup_kube_context() {
     fi
 
     instruction "It's time to setup the default Kubernetes cluster, project, and namespace you'll be using. \
-You'll be presented with lists and asked to pick a number; pay attention to the columns. You'll first select \
-your default Rancher server (if you have multiple) and then your Cluster and Project. Look for the row with \
-the project you'll use most often and enter the number in the first column."
+You'll first pick your default Rancher server (if you have multiple). Then you'll get a numbered list of \
+clusters and projects; pay attention to the columns, find the row with the project you'll use most often \
+and enter the number in the first column. Last, you'll pick your default namespace."
 
     DEFAULT_NAMESPACE=""
     RANCHER_CURRENT_CLUSTER=""
@@ -575,9 +1365,12 @@ the project you'll use most often and enter the number in the first column."
         DEFAULT_NAMESPACE=""
         RANCHER_CURRENT_CLUSTER=""
 
-        info "Select your default Rancher server:"
-        rancher server switch
+        if ! select_default_rancher_server; then
+            warn "Couldn't switch to that Rancher server. Please pick again."
+            continue
+        fi
 
+        info "Loading clusters and projects from $(rancher_current_server); this can take a moment..."
         info "Select your default Kubernetes cluster and project:"
         rancher context switch
 
@@ -612,7 +1405,7 @@ the project you'll use most often and enter the number in the first column."
     KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config use-context "${RANCHER_CURRENT_CLUSTER}" >/dev/null
 }
 
-while getopts "udThIRAGDKSac:s:r:g:" arg; do
+while getopts "udThIRAGDKSaCc:s:r:g:" arg; do
     case $arg in
         h) echo "Usage: $0 [options]"
            echo
@@ -627,16 +1420,21 @@ while getopts "udThIRAGDKSac:s:r:g:" arg; do
            echo "  -G           Prompt to add additional GitHub servers even if some are already configured."
            echo "  -K           Skip kubectl and kubeconfig."
            echo "  -a           Login to all ADP services, not just Rancher and Kubernetes."
+           echo "  -C           Check status only (read-only, no prompts, no secrets printed). Combine with -a to include all services."
            echo "  -g <githubs> A space separated list of GitHub servers to add. Default: ${DEFAULT_GITHUB_SERVERS[*]}"
            echo "  -r <rancher> The Rancher server to login to. Default: $DEFAULT_RANCHER_HOSTNAME"
            echo "  -c <context> The Kubernetes context to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_CONTEXT"
            echo "  -s <secret>  The Kubernetes secret to use to store the client configuration. Default: $KUBE_CLIENT_CONFIG_SECRET"
            echo "  -h           Show this help message."
+           echo
+           echo "Exit codes: 0 ok; 1 error or some services could not be set up; 2 needs an interactive"
+           echo "terminal; 3 (-C) something is missing or expired; 4 (-C) only unreachable hosts."
            exit 0 ;;
         d) ENABLE_DEBUG="true" ;;
         D) ONLY_DOWNLOAD="true" ;;
         T)
             warn "🚨 Trace mode is enabled. This causes severe issues with graphical selection prompts and may make the script unusable."
+            warn "🚨 Trace output contains credentials: do not share it or paste it into an AI tool or an issue."
             set -x
             ;;
         u) FORCE_UPDATE="true" ;;
@@ -648,6 +1446,7 @@ while getopts "udThIRAGDKSac:s:r:g:" arg; do
         G) FORCE_ADD_MORE_GITHUB="true" ;;
         K) SKIP_KUBECONFIG="true" ;;
         a) SETUP_INTERNAL_SERVICES="true" ;;
+        C) CHECK_ONLY="true" ;;
         c) KUBE_CLIENT_CONFIG_CONTEXT="$OPTARG" ;;
         s) KUBE_CLIENT_CONFIG_SECRET="$OPTARG" ;;
         r) DEFAULT_RANCHER_HOSTNAME="$OPTARG"
@@ -668,6 +1467,23 @@ done
 
 if [[ "${ALL_BINARIES_AVAILABLE}" = "false" ]]; then
     exit 1
+fi
+
+if [[ "${CHECK_ONLY}" = "true" ]]; then
+    PATH="${HOME}/.local/bin:${PATH}" run_status_check
+    exit $?
+fi
+
+# Not interactive, but run from a file (for example by an AI agent or a CI job)
+# rather than piped from curl: say how to run it properly and change nothing.
+if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" != "true" ]] && [[ -f "$0" ]]; then
+    echo "adp-connect needs an interactive terminal and a web browser, so it can't run here."
+    echo "Ask the user to run this in their own terminal:"
+    echo
+    echo "    adp-connect ${ORIGINAL_ARGS[*]}"
+    echo
+    echo "To check status without a terminal, run: adp-connect -C (add -a to include all services)."
+    exit 2
 fi
 
 if ! [[ -d "$HOME/.local/bin" ]]; then
@@ -712,9 +1528,9 @@ if ! [ -t 0 ] && [[ "${ONLY_DOWNLOAD}" != "true" ]]; then
 
     # shellcheck disable=SC2016
     echo 'adp-connect has been installed, please re-run it in a terminal with the command
- adp-connect, use `adp-connect -h` for help.'
+ adp-connect, use `adp-connect -h` for help. To check status without a terminal, use `adp-connect -C`.'
 
-    exit 1
+    exit 2
 fi
 
 if ! [ "${FORCE_CURRENT_SHELL}" = "true" ]; then
@@ -774,7 +1590,6 @@ fi
 
 should_install "rancher"
 INSTALL_RANCHER=$?
-NEEDED_RANCHER_VERSION=2.11.3
 
 if [[ "${INSTALL_RANCHER}" = "1" ]]; then
     compare_versions "$(rancher --version | awk '{ print $3 }')" "${NEEDED_RANCHER_VERSION}"
@@ -794,9 +1609,26 @@ fi
 if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
     debug "Checking for existing Rancher CLI configuration..."
     ALL_RANCHERS_ADDED="false"
+
+    # Servers configured before this run; anything usable that isn't in this list
+    # by the end of validation was added during this run.
+    INITIAL_RANCHER_SERVERS=()
+    if [[ -f "$HOME/.rancher/cli2.json" ]] && rancher_config_parses; then
+        for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
+            INITIAL_RANCHER_SERVERS+=("${SERVER}")
+        done
+    fi
+
+    if [[ -f "$HOME/.rancher/cli2.json" ]] && ! rancher_config_parses; then
+        warn "🚨 Your Rancher CLI configuration can't be read, so it will be set up again."
+        backup_rancher_config
+        rm -f "$HOME/.rancher/cli2.json"
+    fi
+
     if [[ -f "$HOME/.rancher/cli2.json" ]]; then
         if [[ -e "${HOME}"/.rancher/cli2.json ]] && [[ -z "$(yq -r '.Servers[].accessKey' "${HOME}"/.rancher/cli2.json)" ]]; then
             debug "Detected incomplete Rancher CLI configuration, deleting it."
+            backup_rancher_config
             rm "${HOME}"/.rancher/cli2.json
 
             rancher_login "${DEFAULT_RANCHER_HOSTNAME}" || exit 1
@@ -806,10 +1638,11 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             fi
 
             debug "Validating existing configuration..."
-            if ! [[ "$(yq -r '.Server.rancherDefault' < "$HOME/.rancher/cli2.json")" = "null" ]]; then
+            if ! [[ "$(yq -r '.Servers.rancherDefault' < "$HOME/.rancher/cli2.json")" = "null" ]]; then
                 warn "🚨 A 'rancherDefault' entry exists in your configuration and is known to cause problems. It's\
         recommended to clear your config and start over."
                 if confirm "Would you like to clear your Rancher CLI configuration?"; then
+                    backup_rancher_config
                     rm -f "$HOME/.rancher/cli2.json"
                     rancher_login "${DEFAULT_RANCHER_HOSTNAME}" || exit 1
                 fi
@@ -842,38 +1675,59 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             break
         fi
 
-        RANCHER_HOSTNAME=$(gum input --width=80 --placeholder="Additional Rancher Hostname")
+        RANCHER_HOSTNAME=$(gum input --width=80 --placeholder="Additional Rancher Hostname" | tr -d '[:space:]')
 
-        rancher_login "${RANCHER_HOSTNAME}"
+        if [[ -z "${RANCHER_HOSTNAME}" ]]; then
+            ALL_RANCHERS_ADDED="true"
+            break
+        fi
+
+        rancher_login "${RANCHER_HOSTNAME}" || record_failure "Rancher ${RANCHER_HOSTNAME}: login failed."
     done
 
     info "Validating all Rancher servers..."
     REACHABLE_RANCHER_SERVERS=()
     UNREACHABLE_RANCHER_SERVERS=()
+    SERVERS_TO_VALIDATE=()
     for SERVER in $(yq -r '.Servers | to_entries[] | .key' < "$HOME/.rancher/cli2.json" | grep -v rancherDefault); do
-        curl -s --connect-timeout 5 --max-time 10 "https://${SERVER}/ping" > /dev/null 2>&1
-        CURL_EXIT=$?
-        if [[ $CURL_EXIT -eq 6 ]] || [[ $CURL_EXIT -eq 7 ]] || [[ $CURL_EXIT -eq 28 ]] || [[ $CURL_EXIT -eq 35 ]]; then
-            warn "⚠️  Warning: Unable to reach Rancher server ${SERVER} (connection, timeout, or TLS error). Skipping."
-            UNREACHABLE_RANCHER_SERVERS+=("${SERVER}")
-            continue
+        SERVERS_TO_VALIDATE+=("${SERVER}")
+    done
+
+    while [[ ${#SERVERS_TO_VALIDATE[@]} -gt 0 ]]; do
+        NOT_REACHED=()
+        for SERVER in "${SERVERS_TO_VALIDATE[@]}"; do
+            validate_rancher_server "${SERVER}"
+            case $? in
+                0) REACHABLE_RANCHER_SERVERS+=("${SERVER}") ;;
+                2) NOT_REACHED+=("${SERVER}") ;;
+                *) UNREACHABLE_RANCHER_SERVERS+=("${SERVER}") ;;
+            esac
+        done
+
+        SERVERS_TO_VALIDATE=()
+        if [[ ${#NOT_REACHED[@]} -eq 0 ]]; then
+            break
         fi
 
-        rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
-
-        if ! gum spin --show-error --title="Checking ${SERVER}..." rancher project list; then
-            yq -i '.Servers["'"${SERVER}"'"].project = ""' "$HOME/.rancher/cli2.json"
-            rancher_login "${SERVER}" || warn "Unable to login to ${SERVER}. Skipping."
+        if ask_retry_unreachable "Rancher" "${NOT_REACHED[@]}"; then
+            SERVERS_TO_VALIDATE=("${NOT_REACHED[@]}")
+        else
+            for SERVER in "${NOT_REACHED[@]}"; do
+                record_failure "Rancher ${SERVER}: unreachable (connection, timeout, or TLS error). Skipping."
+                UNREACHABLE_RANCHER_SERVERS+=("${SERVER}")
+            done
         fi
-
-        REACHABLE_RANCHER_SERVERS+=("${SERVER}")
     done
 
     if [[ ${#UNREACHABLE_RANCHER_SERVERS[@]} -gt 0 ]]; then
-        warn "Skipping unreachable Rancher servers for remaining setup: ${UNREACHABLE_RANCHER_SERVERS[*]}"
+        warn "Skipping these Rancher servers for the remaining setup: ${UNREACHABLE_RANCHER_SERVERS[*]}"
     fi
 
-    info "🎉 Rancher servers are configured and validated!"
+    if [[ ${#REACHABLE_RANCHER_SERVERS[@]} -gt 0 ]]; then
+        info "🎉 Rancher servers are configured and validated: ${REACHABLE_RANCHER_SERVERS[*]}"
+    else
+        warn "No Rancher servers could be used in this run."
+    fi
 
     if [[ -z "${SKIP_KUBECONFIG}" ]]; then
         info "Generating/updating kubeconfig (this will take some time)..."
@@ -895,14 +1749,29 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
         for SERVER in "${REACHABLE_RANCHER_SERVERS[@]}"; do
             debug "Switching to Rancher server ${SERVER}..."
             rancher server switch "${SERVER}" 2> >(grep -v "Saving config" >&2) >/dev/null
-            for CLUSTER in $(rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
-            if [[ -z "${SKIP_KUBECONFIG}" ]]; then
-                TEMP_KUBE_CONFIG=$(printf '%s' "${SERVER}-${CLUSTER}" | base64)
-                debug "Fetching kubeconfig for cluster ${CLUSTER} on server ${SERVER}..."
-                gum spin --show-error --title="Fetching kubeconfig for cluster ${CLUSTER}..." -- rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
-                KUBE_CONFIGS+=("${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml")
+            # Must be the same choice rancher_login makes, so the credential keys match.
+            SERVER_AUTH_PROVIDER=$(rancher_auth_provider "${SERVER}")
+            for CLUSTER in $(with_spinner "Listing clusters on ${SERVER}..." rancher cluster list | grep -v CURRENT | sed 's/^*//g' | awk '{ print $1 }'); do
+            TEMP_KUBE_CONFIG=$(printf '%s' "${SERVER}-${CLUSTER}" | base64)
+            debug "Fetching kubeconfig for cluster ${CLUSTER} on server ${SERVER}..."
+            if ! gum spin --show-error --title="Fetching kubeconfig for cluster ${CLUSTER}..." -- rancher cluster kf "${CLUSTER}" > "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml" || \
+               ! [[ -s "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml" ]]; then
+                record_failure "Kubernetes cluster ${CLUSTER} on ${SERVER}: could not fetch its kubeconfig. Skipping."
+                rm -f "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
+                continue
             fi
-            KUBE_CLUSTER_VERSIONS+=("$(rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion' | sed -E 's/^([vV]?[0-9]+\.[0-9]+\.[0-9]+).*/\1/')")
+
+            CLUSTER_VERSION="$(with_spinner "Checking the Kubernetes version of ${CLUSTER}..." rancher inspect --type=cluster "${CLUSTER}" | yq -r '.version.gitVersion' | sed -E 's/^([vV]?[0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+            if ! [[ "${CLUSTER_VERSION}" =~ ^[vV]?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                record_failure "Kubernetes cluster ${CLUSTER} on ${SERVER}: could not read its version. Skipping."
+                rm -f "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml"
+                continue
+            fi
+
+            align_rancher_exec_users "${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml" "${SERVER}" "${SERVER_AUTH_PROVIDER}"
+
+            KUBE_CONFIGS+=("${TEMP_DIR}/${TEMP_KUBE_CONFIG}.yaml")
+            KUBE_CLUSTER_VERSIONS+=("${CLUSTER_VERSION}")
             done
         done
 
@@ -995,72 +1864,98 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
             done
         fi
 
-        if [[ -n "${KUBE_CURRENT_CONTEXT}" ]]; then
+        NEWLY_ADDED_RANCHER_SERVERS=()
+        for SERVER in "${REACHABLE_RANCHER_SERVERS[@]}"; do
+            if ! is_in_array "${SERVER}" "${INITIAL_RANCHER_SERVERS[@]}"; then
+                NEWLY_ADDED_RANCHER_SERVERS+=("${SERVER}")
+            fi
+        done
+
+        # The current context is kept as long as it still exists. A missing namespace
+        # is fine (kubectl then uses "default"). Default selection only runs when
+        # there is no usable current context or a new Rancher server was added.
+        CURRENT_RANCHER_SERVER_NAME=""
+        if [[ -n "${KUBE_CURRENT_CONTEXT}" ]] && [[ "${KUBE_CURRENT_CONTEXT}" != "null" ]] && \
+           KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config get-contexts -o name 2>/dev/null | grep -qxF "${KUBE_CURRENT_CONTEXT}"; then
             KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config use-context "${KUBE_CURRENT_CONTEXT}" >/dev/null
 
-            CURRENT_NAMESPACE=$(kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'"$(kubectl config current-context)"'")].context.namespace}')
-            CURRENT_CLUSTER_URL=$(kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'"$(kubectl config current-context)"'")].cluster.server}')
+            CURRENT_NAMESPACE=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={..namespace}')
+            CURRENT_CLUSTER_URL=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.clusters[0].cluster.server}')
             # shellcheck disable=SC2001
             CURRENT_RANCHER_SERVER_URL=$(printf '%s' "${CURRENT_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
-            CURRENT_RANCHER_SERVER_NAME=$(rancher server ls | sed 's/^*//g' | grep -v CURRENT | grep "${CURRENT_RANCHER_SERVER_URL}" | awk '{ print $1 }')
+            if [[ -n "${CURRENT_RANCHER_SERVER_URL}" ]]; then
+                CURRENT_RANCHER_SERVER_NAME=$(rancher server ls | sed 's/^*//g' | grep -v CURRENT | grep -F "${CURRENT_RANCHER_SERVER_URL}" | awk '{ print $1 }' | head -n 1)
+            fi
 
             debug "Current namespace: ${CURRENT_NAMESPACE}"
             debug "Current cluster URL: ${CURRENT_CLUSTER_URL}"
             debug "Current Rancher server: ${CURRENT_RANCHER_SERVER_URL}"
             debug "Current Rancher server name: ${CURRENT_RANCHER_SERVER_NAME}"
 
-            if [[ -n "${CURRENT_NAMESPACE}" ]]; then
-                if ! (rancher namespaces -q | grep -q "${CURRENT_NAMESPACE}"); then
-                    warn "Your current namespace ${CURRENT_NAMESPACE} does not exist in project $(rancher context current | sed 's/.*Project://')".
-                    setup_kube_context
-                fi
-            else
-                warn "Your current context $(kubectl config current-context) does not have a namespace set."
+            if [[ ${#NEWLY_ADDED_RANCHER_SERVERS[@]} -gt 0 ]]; then
+                info "You added ${NEWLY_ADDED_RANCHER_SERVERS[*]}, so you can now pick your default cluster, project and namespace."
+                setup_kube_context
+            elif [[ -n "${CURRENT_RANCHER_SERVER_NAME}" ]] && \
+                 ! is_in_array "${CURRENT_RANCHER_SERVER_NAME}" "${REACHABLE_RANCHER_SERVERS[@]}"; then
+                # Don't make the user replace their default with whatever happens to be
+                # reachable right now (e.g. while off a VPN); check it on a later run.
+                info "Keeping your current context (${KUBE_CURRENT_CONTEXT}). Its Rancher server, \
+${CURRENT_RANCHER_SERVER_NAME}, couldn't be reached, so it wasn't checked."
+            elif [[ -n "${CURRENT_NAMESPACE}" ]] && [[ -n "${CURRENT_RANCHER_SERVER_NAME}" ]] && \
+                 ! (with_spinner "Checking your current namespace ${CURRENT_NAMESPACE}..." \
+                        env KUBECONFIG="$HOME/.kube/config.incomplete" kubectl get namespace "${CURRENT_NAMESPACE}" -o name &>/dev/null); then
+                warn "Your current namespace ${CURRENT_NAMESPACE} no longer exists or you can't access it."
                 setup_kube_context
             fi
         else
+            if [[ -n "${KUBE_CURRENT_CONTEXT}" ]] && [[ "${KUBE_CURRENT_CONTEXT}" != "null" ]]; then
+                warn "Your current context ${KUBE_CURRENT_CONTEXT} no longer exists."
+            fi
             setup_kube_context
         fi
 
-        NEW_NAMESPACE=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.contexts[?(@.name=="'"$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)"'")].context.namespace}')
-        NEW_CLUSTER_URL=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.clusters[?(@.name=="'"$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context)"'")].cluster.server}')
+        NEW_CONTEXT=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context 2>/dev/null)
+        NEW_NAMESPACE=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={..namespace}' 2>/dev/null)
+        NEW_CLUSTER_URL=$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config view --minify --output 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null)
         # shellcheck disable=SC2001
         NEW_RANCHER_SERVER_URL=$(printf '%s' "${NEW_CLUSTER_URL}" | sed -e 's|^\([^:/]*://[^/]*\).*|\1|')
-        NEW_RANCHER_SERVER_NAME=$(rancher server ls |  sed 's/^*//g' | grep -v CURRENT | grep "${NEW_RANCHER_SERVER_URL}" | awk '{ print $1 }')
-
-        if [[ -z "${NEW_NAMESPACE}" ]] && [[ -n "${CURRENT_NAMESPACE}" ]]; then
-            debug "New kubeconfig doesn't have a namespace set on the current context, this is likely a weirdness from merging. Reusing the old namespace."
-            NEW_NAMESPACE="${CURRENT_NAMESPACE}"
-            KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config set-context --current --namespace="${NEW_NAMESPACE}" >/dev/null
+        NEW_RANCHER_SERVER_NAME=""
+        if [[ -n "${NEW_RANCHER_SERVER_URL}" ]]; then
+            NEW_RANCHER_SERVER_NAME=$(rancher server ls | sed 's/^*//g' | grep -v CURRENT | grep -F "${NEW_RANCHER_SERVER_URL}" | awk '{ print $1 }' | head -n 1)
         fi
 
+        debug "New context: ${NEW_CONTEXT}"
         debug "New namespace: ${NEW_NAMESPACE}"
         debug "New cluster URL: ${NEW_CLUSTER_URL}"
-        debug "New Rancher server: ${NEW_RANCHER_SERVER_URL}"
         debug "New Rancher server name: ${NEW_RANCHER_SERVER_NAME}"
 
+        # Keep the Rancher CLI's current project in line with the default namespace.
+        # Only possible when there is a namespace and its Rancher server is reachable.
         if [[ -z "${NEW_RANCHER_SERVER_NAME}" ]]; then
-            error "Your new context $(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context) does not have a corresponding Rancher server, somehow. This is a bug. Please rerun with '-T' and report it."
-            exit 1
-        fi
+            debug "The current context isn't on a configured Rancher server; leaving the Rancher CLI context alone."
+        elif ! is_in_array "${NEW_RANCHER_SERVER_NAME}" "${REACHABLE_RANCHER_SERVERS[@]}"; then
+            debug "Skipping Rancher context switch because ${NEW_RANCHER_SERVER_NAME} is unreachable."
+        elif [[ -n "${NEW_NAMESPACE}" ]]; then
+            NEW_PROJECT_ID=$(with_spinner "Looking up the project for ${NEW_NAMESPACE}..." \
+                env KUBECONFIG="$HOME/.kube/config.incomplete" kubectl get namespace "${NEW_NAMESPACE}" -o yaml 2>/dev/null | \
+                yq -r '.metadata.annotations."field.cattle.io/projectId" // ""')
 
-        if [[ -z "${NEW_NAMESPACE}" ]]; then
-            error "Your new context $(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl config current-context) does not have a namespace set. This is a bug. Please rerun with '-T' and report it."
-            exit 1
-        fi
-
-        if is_in_array "${NEW_RANCHER_SERVER_NAME}" "${REACHABLE_RANCHER_SERVERS[@]}"; then
-            rancher server switch "${NEW_RANCHER_SERVER_NAME}" 2> >(grep -v "Saving config" >&2) >/dev/null
-            rancher context switch "$(KUBECONFIG="$HOME/.kube/config.incomplete" kubectl get namespace "${NEW_NAMESPACE}" -o yaml | yq -r '.metadata.annotations."field.cattle.io/projectId"')" 2> >(grep -v "Saving config" >&2) >/dev/null
-        else
-            warn "Skipping Rancher context switch because ${NEW_RANCHER_SERVER_NAME} is unreachable."
+            if [[ -n "${NEW_PROJECT_ID}" ]]; then
+                rancher server switch "${NEW_RANCHER_SERVER_NAME}" 2> >(grep -v "Saving config" >&2) >/dev/null
+                rancher context switch "${NEW_PROJECT_ID}" 2> >(grep -v "Saving config" >&2) >/dev/null || \
+                    debug "Couldn't switch the Rancher CLI to project ${NEW_PROJECT_ID}."
+            fi
         fi
 
         mv "$HOME/.kube/config.incomplete" "$HOME/.kube/config"
 
         info "🎉 You now have access to $(yq '.contexts | length' ~/.kube/config) Kubernetes contexts!"
         info "Your default context is $(kubectl config current-context)."
-        info "You'll be using the namespace $(kubectl config view --minify --output 'jsonpath={..namespace}') by default."
+        if [[ -n "$(kubectl config view --minify --output 'jsonpath={..namespace}')" ]]; then
+            info "You'll be using the namespace $(kubectl config view --minify --output 'jsonpath={..namespace}') by default."
+        else
+            info "No default namespace is set for this context; kubectl will use 'default' unless you pass -n."
+        fi
         fi
     fi
 
@@ -1082,42 +1977,74 @@ fi
 if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
     info "Fetching Sealed Secrets sealing certificates..."
     KUBESEAL_FAILED="false"
+    KUBESEAL_SKIPPED=()
     for CONTEXT in $(yq eval -o json -I=0 '.contexts[]' "$HOME/.kube/config"); do
         NAME=$(yq -r '.name' <<< "${CONTEXT}")
 
-        if [[ ! "${NAME}" =~ -fqdn$ ]]; then
-            if ! kubeseal --context="${NAME}" --request-timeout=2s --fetch-cert \
-                        --controller-name="${SEALED_SECRETS_CONTROLLER_NAME}" \
-                        --controller-namespace="${SEALED_SECRETS_CONTROLLER_NAMESPACE}" > "$HOME/.kube/$NAME.pem" 2>>/tmp/kubeseal.err; then
-                warn "❌ Warning: Failed to fetch Sealed Secrets certificate for ${NAME}."
+        if [[ "${NAME}" =~ -fqdn$ ]]; then
+            continue
+        fi
 
-                KUBESEAL_FAILED="true"
-            fi
+        # Don't wait on clusters behind a Rancher server we already know is unreachable.
+        CONTEXT_CLUSTER=$(yq -r '.context.cluster // ""' <<< "${CONTEXT}")
+        CONTEXT_HOST=$(yq -r '.clusters[] | select(.name == "'"${CONTEXT_CLUSTER}"'") | .cluster.server // ""' "$HOME/.kube/config" | \
+            head -n 1 | sed -e 's|^[a-zA-Z]*://||' -e 's|[:/].*||')
+        if [[ -n "${CONTEXT_HOST}" ]] && is_in_array "${CONTEXT_HOST}" "${UNREACHABLE_RANCHER_SERVERS[@]}"; then
+            KUBESEAL_SKIPPED+=("${NAME}")
+            continue
+        fi
+
+        KUBESEAL_COMMAND=(kubeseal --context="${NAME}" --request-timeout=15s --fetch-cert
+            --controller-name="${SEALED_SECRETS_CONTROLLER_NAME}"
+            --controller-namespace="${SEALED_SECRETS_CONTROLLER_NAMESPACE}")
+
+        # Contexts whose credentials come from an exec plugin (for example
+        # `rancher token`) may need to sign in interactively. Run those in the
+        # open, without a spinner, so any prompt is visible and can be answered.
+        CONTEXT_USER=$(yq -r '.context.user // ""' <<< "${CONTEXT}")
+        CONTEXT_USES_EXEC=$(yq -r '[.users[] | select(.name == "'"${CONTEXT_USER}"'") | .user.exec != null] | any' "$HOME/.kube/config")
+
+        # Fetch into a temporary file so a failure never replaces a certificate
+        # that was fetched successfully before.
+        if [[ "${CONTEXT_USES_EXEC}" = "true" ]]; then
+            info "Fetching the Sealed Secrets certificate for ${NAME}. Its credentials come from a plugin, so you may be asked to sign in below."
+            "${KUBESEAL_COMMAND[@]}" > "${TEMP_DIR}/${NAME}.pem"
+        else
+            with_spinner "Fetching the Sealed Secrets certificate for ${NAME}..." "${KUBESEAL_COMMAND[@]}" > "${TEMP_DIR}/${NAME}.pem"
+        fi
+        KUBESEAL_RESULT=$?
+
+        if [[ ${KUBESEAL_RESULT} -eq 0 ]] && [[ -s "${TEMP_DIR}/${NAME}.pem" ]]; then
+            mv "${TEMP_DIR}/${NAME}.pem" "$HOME/.kube/${NAME}.pem"
+        else
+            rm -f "${TEMP_DIR}/${NAME}.pem"
+            warn "❌ Warning: Failed to fetch Sealed Secrets certificate for ${NAME}."
+
+            KUBESEAL_FAILED="true"
         fi
     done
+
+    if [[ ${#KUBESEAL_SKIPPED[@]} -gt 0 ]]; then
+        info "Skipped Sealed Secrets certificates for ${#KUBESEAL_SKIPPED[@]} contexts on unreachable Rancher servers; any certificates fetched earlier were kept."
+    fi
 
     if [[ "${KUBESEAL_FAILED}" = "true" ]]; then
         warn "🚨 You won't be able to seal secrets for these clusters locally until this is resolved. \
 This may be ok if you don't intend to use those clusters; otherwise, it may be a networking issue.
 Please make sure you're on the VPN or VDI and can otherwise access the clusters with kubectl. If this keeps failing, \
-run this script again with the -d flag for more output."
-
-        if [[ "${ENABLE_DEBUG}" ]]; then
-            debug "kubeseal error output:"
-            cat /tmp/kubeseal.err
-        fi
-
-        rm /tmp/kubeseal.err
+check the errors shown above each warning."
     fi
 fi
 
-if should_install "helm"; then
+if should_install_helm; then
     gum spin --show-error --title="Downloading Helm Installer..." -- \
-        curl -Lo "${TEMP_DIR}/get-helm-3" https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-    chmod 755 "${TEMP_DIR}/get-helm-3"
+        curl -fLo "${TEMP_DIR}/get-helm-${NEEDED_HELM_MAJOR_VERSION}" \
+        https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-${NEEDED_HELM_MAJOR_VERSION} || exit 1
+    chmod 755 "${TEMP_DIR}/get-helm-${NEEDED_HELM_MAJOR_VERSION}"
     HELM_INSTALL_DIR="$HOME/.local/bin" USE_SUDO="false" gum spin --show-error \
-        --title="Installing Helm..." "${TEMP_DIR}/get-helm-3" || exit 1
-    info "🎉 Successfully installed Helm!"
+        --title="Installing Helm..." "${TEMP_DIR}/get-helm-${NEEDED_HELM_MAJOR_VERSION}" || exit 1
+    hash -r
+    info "🎉 Successfully installed Helm $(helm version --template '{{.Version}}')!"
 fi
 
 if should_install "skaffold"; then
@@ -1135,12 +2062,27 @@ if should_install "gh"; then
 fi
 
 if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
-    for GITHUB_SERVER in "${DEFAULT_GITHUB_SERVERS[@]}"; do
-        if gh auth status --hostname="${GITHUB_SERVER}" &>/dev/null; then
-            info "🎉 You're already authenticated to ${GITHUB_SERVER}!"
+    GITHUBS_TO_SETUP=("${DEFAULT_GITHUB_SERVERS[@]}")
+    while [[ ${#GITHUBS_TO_SETUP[@]} -gt 0 ]]; do
+        NOT_REACHED=()
+        for GITHUB_SERVER in "${GITHUBS_TO_SETUP[@]}"; do
+            github_login "${GITHUB_SERVER}"
+            if [[ $? -eq 2 ]]; then
+                NOT_REACHED+=("${GITHUB_SERVER}")
+            fi
+        done
+
+        GITHUBS_TO_SETUP=()
+        if [[ ${#NOT_REACHED[@]} -eq 0 ]]; then
+            break
+        fi
+
+        if ask_retry_unreachable "GitHub" "${NOT_REACHED[@]}"; then
+            GITHUBS_TO_SETUP=("${NOT_REACHED[@]}")
         else
-            info "🔐 Authenticating to ${GITHUB_SERVER}..."
-            gh auth login --hostname="${GITHUB_SERVER}" --web || exit 1
+            for GITHUB_SERVER in "${NOT_REACHED[@]}"; do
+                record_failure "GitHub ${GITHUB_SERVER}: unreachable (connection, timeout, or TLS error). Skipping."
+            done
         fi
     done
 
@@ -1168,16 +2110,16 @@ if [[ ! "${ONLY_DOWNLOAD}" = "true" ]]; then
         fi
 
         GITHUB_SERVER=$(gum input --width=80 --placeholder="Github Server")
+        GITHUB_SERVER="${GITHUB_SERVER//[[:space:]]/}"
 
-        if gh auth status --hostname="${GITHUB_SERVER}" &>/dev/null; then
-            warn "🚨 ${GITHUB_SERVER} is already configured."
+        if [[ -z "${GITHUB_SERVER}" ]]; then
             continue
         fi
 
-        info "🔐 Authenticating to ${GITHUB_SERVER}..."
-        gh auth login --hostname="${GITHUB_SERVER}" --web || exit 1
-
-        info "🎉 You're successfully authenticated to ${GITHUB_SERVER}!"
+        github_login "${GITHUB_SERVER}"
+        if [[ $? -eq 2 ]]; then
+            warn "Couldn't reach ${GITHUB_SERVER}. It may only be reachable on a specific VPN. Connect to it and add it again if you need it."
+        fi
     done
 
     if ! git config --global --get init.defaultBranch &>/dev/null; then
@@ -1221,7 +2163,9 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
         fi
 
         if [[ "${HAVE_DOCKER}" = "true" ]]; then
-            if ! docker login docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" <<< "" &>/dev/null; then
+            # shellcheck disable=SC2016 # $1 is expanded by the inner sh, on purpose.
+            if ! with_spinner "Checking your Artifactory Docker login..." \
+                    sh -c 'docker login "$1" < /dev/null' _ docker."${DEFAULT_ARTIFACTORY_HOSTNAME}" &>/dev/null; then
                 [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
 
                 if [[ -z "${USER_OHIOID}" ]]; then
@@ -1255,15 +2199,21 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
         if which xdg-open &>/dev/null || which open &>/dev/null; then
             if ! argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }' | grep -q "${DEFAULT_ARGOCD_HOSTNAME}"; then
                 info "Logging into ArgoCD at ${DEFAULT_ARGOCD_HOSTNAME}..."
-                argocd login "${DEFAULT_ARGOCD_HOSTNAME}" --grpc-web --sso --skip-test-tls || exit 1
+                argocd login "${DEFAULT_ARGOCD_HOSTNAME}" --grpc-web --sso --skip-test-tls || \
+                    record_failure "Argo CD ${DEFAULT_ARGOCD_HOSTNAME}: login failed."
             fi
 
             ARGOCD_CURRENT_CONTEXT="$(argocd context | grep '\*' | awk '{ print $2 }')"
             for ARGOCD_SERVER in $(argocd context | grep -v NAME | sed 's/^*//' | awk '{ print $2 }'); do
-                argocd context "${ARGOCD_SERVER}" 1>/dev/null || exit 1
-                if ! argocd version &>/dev/null; then
+                if ! argocd context "${ARGOCD_SERVER}" 1>/dev/null; then
+                    record_failure "Argo CD ${ARGOCD_SERVER}: could not switch to this server. Skipping."
+                    continue
+                fi
+
+                if ! with_spinner "Checking Argo CD at ${ARGOCD_SERVER}..." argocd version &>/dev/null; then
                     info "Need to relogin to ArgoCD at ${ARGOCD_SERVER}..."
-                    argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
+                    argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || \
+                        record_failure "Argo CD ${ARGOCD_SERVER}: login failed."
                 else
                     info "🎉 You're successfully authenticated to ArgoCD at $(printf '%s' "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
                 fi
@@ -1300,48 +2250,72 @@ if [[ "${SETUP_INTERNAL_SERVICES}" = "true" ]]; then
                 fi
 
                 info "Logging into ArgoCD at ${ARGOCD_SERVER}..."
-                argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls || exit 1
-
-                info "🎉 You're successfully authenticated to $(printf '%s' "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+                if argocd login "${ARGOCD_SERVER}" --grpc-web --sso --skip-test-tls; then
+                    info "🎉 You're successfully authenticated to $(printf '%s' "${ARGOCD_SERVER}" | awk -F: '{ print $1 }')!"
+                else
+                    record_failure "Argo CD ${ARGOCD_SERVER}: login failed."
+                fi
             done
 
-            argocd context "${ARGOCD_CURRENT_CONTEXT}" 1>/dev/null || exit 1
+            if [[ -n "${ARGOCD_CURRENT_CONTEXT}" ]]; then
+                argocd context "${ARGOCD_CURRENT_CONTEXT}" 1>/dev/null || \
+                    warn "Could not switch Argo CD back to ${ARGOCD_CURRENT_CONTEXT}; run 'argocd context' to pick one."
+            fi
         else
             warn "🚨 Your system is unable to open a browser from a cli (no xdg-open or open tools are available). Skipping ArgoCD configuration."
         fi
 
-        if ! helm search repo artifactory --fail-on-no-result -o yaml &>/dev/null; then
-            info "Adding Artifactory helm repository..."
-            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-            [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+        for LEGACY_HELM_REPOSITORY in $(legacy_helm_repositories); do
+            info "Removing the old Artifactory helm repository ${LEGACY_HELM_REPOSITORY}; charts now come from ${DEFAULT_HELM_OCI_REPOSITORY}."
+            helm repo remove "${LEGACY_HELM_REPOSITORY}" >/dev/null || \
+                warn "Could not remove the helm repository ${LEGACY_HELM_REPOSITORY}. Run 'helm repo remove ${LEGACY_HELM_REPOSITORY}' yourself."
+        done
 
-            if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
-                helm repo add artifactory https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
+        # Helm falls back to Docker's credentials, so the Docker login above is
+        # normally enough. A separate helm login is only needed without one,
+        # e.g. when Docker isn't installed or running.
+        HELM_LOGIN_SOURCE="$(helm_registry_login_source "${DEFAULT_HELM_OCI_REGISTRY}")"
+        if [[ "${HELM_LOGIN_SOURCE}" = "docker" ]]; then
+            info "🎉 Helm will use your Artifactory Docker login for ${DEFAULT_HELM_OCI_REPOSITORY}!"
+        elif [[ -z "${HELM_LOGIN_SOURCE}" ]]; then
+            info "Docker isn't logged into Artifactory, so logging helm into ${DEFAULT_HELM_OCI_REPOSITORY} directly..."
+            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
+
+            if [[ -z "${USER_OHIOID}" ]]; then
+                warn "Skipping the Artifactory helm login. You'll need to run 'helm registry login ${DEFAULT_HELM_OCI_REGISTRY}' yourself or rerun this script."
             else
-                warn "Skipping adding Artifactory helm repository. You'll need to add it manually or rerun this script."
+                while true; do
+                    [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
+
+                    if [[ -z "${ARTIFACTORY_TOKEN}" ]]; then
+                        warn "Skipping the Artifactory helm login. You'll need to run 'helm registry login ${DEFAULT_HELM_OCI_REGISTRY}' yourself or rerun this script."
+                        break
+                    fi
+
+                    if helm registry login "${DEFAULT_HELM_OCI_REGISTRY}" -u "${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}"; then
+                        info "🎉 Successfully logged helm into ${DEFAULT_HELM_OCI_REPOSITORY}!"
+                        break
+                    fi
+
+                    warn "Artifactory helm login failed. Please try again."
+                    ARTIFACTORY_TOKEN=""
+                done
             fi
         else
-            info "🎉 You're already authenticated to the Artifactory helm repository!"
-
+            info "🎉 Helm is already logged into ${DEFAULT_HELM_OCI_REPOSITORY}!"
         fi
-
-        if ! helm search repo artifactory-push --fail-on-no-result -o yaml &>/dev/null; then
-            info "Adding Artifactory helm repository with push access..."
-            [[ -z "${USER_OHIOID}" ]] && USER_OHIOID="$(get_ohioid)"
-            [[ -z "${ARTIFACTORY_TOKEN}" ]] && ARTIFACTORY_TOKEN="$(get_artifactory_token)"
-
-            if [[ -n "${ARTIFACTORY_TOKEN}" ]] && [[ -n "${USER_OHIOID}" ]]; then
-                helm repo add artifactory-push https://"${DEFAULT_ARTIFACTORY_HOSTNAME}"/artifactory/oit-helm --username="${USER_OHIOID}" --password-stdin <<< "${ARTIFACTORY_TOKEN}" || exit 1
-            else
-                warn "Skipping adding Artifactory helm repository with push access. You'll need to add it manually or rerun this script."
-            fi
-
-        else
-            info "🎉 You're already authenticated to the Artifactory helm repository with push access!"
-        fi
-
-        helm repo update
     fi
+fi
+
+if [[ ${#FAILED_SERVICES[@]} -gt 0 ]]; then
+    warn "These services could not be set up:"
+    for FAILED_SERVICE in "${FAILED_SERVICES[@]}"; do
+        warn "  - ${FAILED_SERVICE}"
+    done
+    warn "Everything else has been set up. Run 'adp-connect -C' to check status."
+    info "You should have the following tools installed and ready to use:"
+    ls -1 "${HOME}"/.local/bin
+    exit 1
 fi
 
 info "🎉 Everything should now be setup. You should have the following tools installed and ready to use:"
