@@ -10,6 +10,10 @@ on:
   release:
     types:
       - released
+  # Only used by delete-merged-docker-tags, to clean up a merged branch's image.
+  pull_request:
+    types:
+      - closed
 
 jobs:
     build-and-push-latest:
@@ -40,21 +44,26 @@ jobs:
         - name: Checkout
           uses: actions/checkout@v3
         - name: Determine tag name from branch name
+          id: tag
           env:
-            BRANCH_NAME: "${{ github.event.pull_request.head.ref }}"
+            BRANCH_NAME: ${{ github.ref_name }}
+          # cs/renovate/ubuntu-26.x -> renovate-ubuntu-26.x. Docker tags allow
+          # only [A-Za-z0-9_.-], up to 128 characters.
           run: |
-            echo "DOCKER_IMAGE_TAG::$($BRANCH_NAME | cut -d '/' -f 2)" >> $GITHUB_OUTPUT
+            TAG="${BRANCH_NAME#cs/}"
+            TAG="${TAG//[^A-Za-z0-9_.-]/-}"
+            echo "tag=${TAG:0:128}" >> "$GITHUB_OUTPUT"
         - name: Kaniko build
           uses: aevea/action-kaniko@master
           with:
             registry: ghcr.io
             password: ${{ secrets.GITHUB_TOKEN }}
-            tag: ${{ env.DOCKER_IMAGE_TAG }}
+            tag: ${{ steps.tag.outputs.tag }}
             cache: true
             cache_registry: cache
 
     build-and-push-release:
-      if: startsWith(github.ref, 'refs/tags/')
+      if: github.event_name == 'release'
       runs-on: ohioit
       permissions:
         contents: read
@@ -62,39 +71,73 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v3
-        - name: Determine tag name from branch name
+        - name: Determine tag name from release
+          id: tag
           env:
-            TAG_NAME: "${{ github.event.pull_request.head.ref }}"
+            RELEASE_TAG: ${{ github.event.release.tag_name }}
           run: |
-            echo "DOCKER_IMAGE_TAG::$($TAG_NAME | cut -d '/' -f 3)" >> $GITHUB_OUTPUT
+            TAG="${RELEASE_TAG//[^A-Za-z0-9_.-]/-}"
+            echo "tag=${TAG:0:128}" >> "$GITHUB_OUTPUT"
         - name: Kaniko build
           uses: aevea/action-kaniko@master
           with:
             registry: ghcr.io
             password: ${{ secrets.GITHUB_TOKEN }}
-            tag: ${{ env.DOCKER_IMAGE_TAG }}
+            tag: ${{ steps.tag.outputs.tag }}
             cache: true
             cache_registry: cache
 
     delete-merged-docker-tags:
-      if: ${{ github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'cs/') }}
+      if: >-
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.merged == true &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'cs/')
       runs-on: ohioit
       permissions:
-        contents: read
         packages: write
       steps:
         - name: Determine tag name from branch name
+          id: tag
           env:
-            BRANCH_NAME: "${{ github.event.pull_request.head.ref }}"
+            BRANCH_NAME: ${{ github.event.pull_request.head.ref }}
+          # Must match build-and-push-branch.
           run: |
-            echo "::set-output name=DOCKER_IMAGE_TAG::$(${BRANCH_NAME} | cut -d '/' -f 2)"
-        - name: Delete Docker tag
+            TAG="${BRANCH_NAME#cs/}"
+            TAG="${TAG//[^A-Za-z0-9_.-]/-}"
+            echo "tag=${TAG:0:128}" >> "$GITHUB_OUTPUT"
+        - name: Delete the branch's image tag
+          uses: actions/github-script@v7
           env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-            IMAGE_TAG: "${{ env.DOCKER_IMAGE_TAG }}"
-          run: |
-            TAG="${IMAGE_TAG}"
-            REPO=ohioit/vscode-devcontainer-base
-            curl -X DELETE \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://ghcr.io/v2/${REPO}/manifests/${TAG}"
+            IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          with:
+            script: |
+              // GHCR doesn't support deleting through the registry API, so use
+              // the Packages API: find the version carrying the tag and delete it.
+              const org = context.repo.owner;
+              const packageName = context.repo.repo;
+              const tag = process.env.IMAGE_TAG;
+              const versions = await github.paginate(
+                github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg,
+                { org, package_type: 'container', package_name: packageName, per_page: 100 },
+              );
+              const matches = versions.filter(
+                (version) => (version.metadata?.container?.tags ?? []).includes(tag),
+              );
+              if (matches.length === 0) {
+                core.info(`No ${packageName}:${tag} image to delete.`);
+                return;
+              }
+              for (const version of matches) {
+                const otherTags = version.metadata.container.tags.filter((t) => t !== tag);
+                if (otherTags.length > 0) {
+                  // The same image is also tagged e.g. latest; deleting the
+                  // version would remove those tags too.
+                  core.info(`Keeping version ${version.id}; it is also tagged ${otherTags.join(', ')}.`);
+                  continue;
+                }
+                await github.rest.packages.deletePackageVersionForOrg({
+                  org, package_type: 'container', package_name: packageName, package_version_id: version.id,
+                });
+                core.info(`Deleted ${packageName}:${tag} (version ${version.id}).`);
+              }
