@@ -72,6 +72,7 @@ ARG KUBECTL_VERSION=1.36.6
 ARG HELM_VERSION=4.3.1
 ARG KUBESEAL_VERSION=0.41.2
 ARG K9S_VERSION=0.51.0
+ARG YQ_VERSION=4.54.3
 
 COPY install-system-dependencies.sh /usr/local/bin/install-system-dependencies
 RUN chmod +x /usr/local/bin/install-system-dependencies && \

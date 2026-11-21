@@ -39,7 +39,6 @@ else
 
     HELM_REPOSITORIES_YAML=/home/vscode/.config/helm/repositories.yaml
     HOST_HELM_REPOSITORIES_YAML=""
-    HOST_HELM_REPOSITORIES_OHIO_YAML=""
     for HOST_HELM in "${HOST_HOME}/.config/helm/repositories.yaml" "${HOST_HOME}/Library/Preferences/helm/repositories.yaml"; do
         if [[ -e "${HOST_HELM}" ]]; then
             HOST_HELM_REPOSITORIES_YAML="${HOST_HELM}"
@@ -50,15 +49,6 @@ else
     if [[ -n "${HOST_HELM_REPOSITORIES_YAML}" ]]; then
         sudo cp "${HOST_HELM_REPOSITORIES_YAML}" "${HELM_REPOSITORIES_YAML}"
         sudo chown vscode:vscode "${HELM_REPOSITORIES_YAML}"
-
-        HOST_HELM_REPOSITORIES_OHIO_YAML="$(dirname "${HOST_HELM_REPOSITORIES_YAML}")/repositories-ohio.yaml"
-        if [[ -e "${HOST_HELM_REPOSITORIES_OHIO_YAML}" ]]; then
-            echo "✓ Found Ohio Helm repositories configuration at ${HOST_HELM_REPOSITORIES_OHIO_YAML}"
-            yq eval-all '. as $repository_config ireduce ({}; . *+ $repository_config)' \
-                "${HELM_REPOSITORIES_YAML}" "${HOST_HELM_REPOSITORIES_OHIO_YAML}" > /tmp/repositories.yaml
-            sudo mv /tmp/repositories.yaml "${HELM_REPOSITORIES_YAML}"
-            sudo chown vscode:vscode "${HELM_REPOSITORIES_YAML}"
-        fi
     else
         echo "Note: No user helm repositories were found in ${HOST_HOME}/.config/helm/repositories.yaml. That's fine if you only use OCI charts such as oci://docker.artifactory.oit.ohio.edu/charts." 1>&2
     fi

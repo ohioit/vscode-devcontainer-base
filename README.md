@@ -211,13 +211,8 @@ these reach the container. These do not currently work in Codespaces.
 #### Classic (non-OCI) Helm repositories
 
 If you use classic Helm repositories, add them on your host with `helm repo add`; the
-container copies your host's `repositories.yaml` on startup.
-
-To keep Ohio-specific repositories separate, optionally place them in a
-`repositories-ohio.yaml` file beside `repositories.yaml` on your host. Container startup
-merges its repositories with `repositories.yaml` before it adds repositories inferred from
-project `Chart.yaml` dependencies. Existing repositories from either file are not replaced
-by those inferred dependencies.
+container copies your host's `repositories.yaml` on startup. It then adds any classic
+repositories that project `Chart.yaml` dependencies need and that aren't already configured.
 
 If you added repositories inside the container instead, copy the file out to your host.
 

@@ -189,10 +189,10 @@ ${HOST_HOME}/.config/helm/repositories.yaml
 ${HOST_HOME}/Library/Preferences/helm/repositories.yaml
 ```
 
-An optional sibling `repositories-ohio.yaml` is merged with the selected `repositories.yaml`
-before the script processes dependencies from `/workspaces/*/helm/Chart.yaml`. Chart-derived
-repositories are only added when neither their URL nor their generated name is already configured;
-this avoids replacing repositories supplied by either host file. OCI dependencies are skipped.
+The selected file is copied as is, then the script processes dependencies from
+`/workspaces/*/helm/Chart.yaml`. Chart-derived repositories are only added when neither their URL nor
+their generated name is already configured, so host repositories are never replaced. OCI dependencies
+are skipped.
 
 Registry logins for Docker and Helm are handled by `sync-registry-credentials.sh` (installed as
 `/usr/local/bin/sync-registry-credentials`) so both work with or without VS Code attached (e.g. the
@@ -224,16 +224,10 @@ login for that registry.
 
 ## YAML and yq
 
-The repository uses Mike Farah `yq` v4 syntax. For multi-file YAML transformations, use
-`yq eval-all`, not jq-style slurp assumptions. The Helm repository merge currently uses:
-
-```bash
-yq eval-all '. as $repository_config ireduce ({}; . *+ $repository_config)' \
-  repositories.yaml repositories-ohio.yaml
-```
-
-`ireduce` deep-merges the documents and `*+` appends arrays, preserving both `repositories`
-lists. `-s` with jq's `add` operator is not valid for the installed `yq` version.
+The repository uses Mike Farah `yq` v4 syntax, not the Python `yq` jq wrapper. The image installs
+it at `/usr/local/bin/yq` (`YQ_VERSION` in the `Dockerfile`, checksum-verified). For multi-file YAML
+transformations, use `yq eval-all`, not jq-style slurp assumptions; `-s` with jq's `add` operator is not
+valid for this `yq`.
 
 ## Validation
 
@@ -248,8 +242,7 @@ shellcheck setup-container.sh install-system-dependencies.sh install-user-depend
 git diff --check
 ```
 
-For a Helm merge change, run the exact `yq eval-all` expression against two small YAML fixtures
-and verify that each file's repository entries remain in the result. Build the image or run the
+Build the image or run the
 Skaffold workflow for changes affecting `Dockerfile`, package installation, entrypoint behavior,
 or tooling versions.
 
